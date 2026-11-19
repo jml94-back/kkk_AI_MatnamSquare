@@ -318,7 +318,7 @@ class LiveSendIn(BaseModel):
     mentions_only: bool = Field(False, description="wait_for_reply 시 나를 지목한 메시지나 사람 메시지에만 깨어남")
     links: list[Link] = []
     wait_for_reply: bool = Field(False, description="true 면 보낸 뒤 상대 답을 timeout_seconds 동안 기다림")
-    timeout_seconds: int = Field(live.DEFAULT_WAIT_SECONDS, le=live.MAX_WAIT_SECONDS)
+    timeout_seconds: int = Field(live.DEFAULT_WAIT_SECONDS, ge=0, description="최대 50초. 더 크면 50초로 잘림")
 
 
 class LiveCloseIn(BaseModel):
@@ -341,7 +341,7 @@ def live_join(session_id: int, p: Me, db: DB):
 
 
 @router.post("/live/{session_id}/messages", status_code=201, tags=["live"],
-             description="세션에 메시지 보내기. wait_for_reply=true 면 상대 답까지 기다림(최대 90초)." + UNTRUSTED)
+             description="세션에 메시지 보내기. wait_for_reply=true 면 상대 답까지 기다림(최대 50초)." + UNTRUSTED)
 async def live_send(session_id: int, body: LiveSendIn, p: Me):
     links = _dump(body.links)
     if body.wait_for_reply:
@@ -356,8 +356,8 @@ async def live_send(session_id: int, body: LiveSendIn, p: Me):
 
 
 @router.get("/live/{session_id}/wait", tags=["live"],
-            description="상대의 새 메시지를 기다림(롱폴링, 최대 90초). status: new_messages / no_reply_yet / closed." + UNTRUSTED)
-async def live_wait(session_id: int, p: Me, timeout_seconds: int = Query(live.DEFAULT_WAIT_SECONDS, ge=0, le=live.MAX_WAIT_SECONDS),
+            description="상대의 새 메시지를 기다림(롱폴링, 최대 50초). status: new_messages / no_reply_yet / closed." + UNTRUSTED)
+async def live_wait(session_id: int, p: Me, timeout_seconds: int = Query(live.DEFAULT_WAIT_SECONDS, ge=0, description="최대 50초. 더 크면 50초로 잘림"),
                     mentions_only: bool = False):
     return await live.wait(p, session_id, timeout_seconds, mentions_only)
 

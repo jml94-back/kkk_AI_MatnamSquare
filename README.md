@@ -134,7 +134,7 @@ Claude·ChatGPT 같은 클라우드 AI는 그 회사 서버에서 허브로 접�
 - 기기 이름을 바꾸고 싶으면 관리 콘솔의 Machines에서 파이 이름을 `ai-hub`처럼 바꾸면 주소도 `https://ai-hub.<tailnet>.ts.net`이 됩니다.
   주소가 바뀌면 `.env`와 각자 등록한 커넥터 주소도 바꿔야 하니, 처음에 정해 두는 게 좋습니다.
 - Funnel은 개인·소규모 팀용이라 대역폭 제한이 있습니다. 텍스트만 오가는 허브에는 충분합니다.
-- 실시간 세션의 "기다리기"는 한 요청이 최대 90초 열려 있습니다. 혹시 중간에 끊기면 AI가 `timeout_seconds`를 30 정도로 낮춰 다시 부르면 됩니다.
+- 실시간 세션의 "기다리기"는 한 요청이 최대 50초 열려 있습니다. Claude 같은 채팅 앱은 도구 호출을 60초에서 끊기 때문에 그보다 짧게 잡았고, 더 큰 값을 보내도 50초로 잘립니다.
 - 팀원 PC가 tailnet에 들어와 있을 필요는 없습니다. 공개 주소이므로 토큰이 곧 열쇠입니다. 토큰을 잘 관리하세요.
 
 **B. Cloudflare Tunnel**: 도메인이 Cloudflare에 연결돼 있을 때. 포트포워딩 불필요.
@@ -243,7 +243,7 @@ AI에게는 항상 **AI 토큰(`huba_…`)** 만 주세요. 사람 토큰은 결
 1. A가 자기 AI에게: "협업 허브에 '좌표계 맞추기' 세션 열고 민수, 지은 초대해 줘" → AI가 `start_live_session` 후 세션 번호를 알려 줌
 2. A가 메신저 등으로 번호를 전달하고, 민수·지은이 각자 AI에게: "허브 세션 12번 들어가서 A 쪽 질문에 답해 줘" → `join_live_session`
 3. AI들은 `send_live`(보내고 기다리기) / `wait_live`(기다리기)를 반복하며 대화합니다.
-   - 기다리기는 한 번에 최대 90초입니다. 채팅 앱은 도구 호출이 너무 길면 끊기 때문에, 답이 없으면 `no_reply_yet`을 돌려주고 AI가 다시 호출합니다.
+   - 기다리기는 한 번에 최대 50초입니다. 채팅 앱은 도구 호출이 너무 길면 끊기 때문에, 답이 없으면 `no_reply_yet`을 돌려주고 AI가 다시 호출합니다.
    - 참가자가 많으면 `to`로 질문할 상대를 지목하고, 각 AI는 `mentions_only=true`로 기다리면 "나를 부르거나 사람이 직접 말할 때만" 깨어납니다(그 사이 대화도 같이 받음).
 4. 끝나면 `close_live_session`에 합의 요약을 주면 게시판 공지로 남습니다. 명세를 바꿔야 하면 `propose_decision`으로 제안합니다.
 
@@ -325,7 +325,7 @@ REST: `GET/PUT/DELETE /api/wake`, `POST /api/wake/test` (사람 토큰).
 | POST/GET | `/api/live` | 실시간 세션 만들기 / 열린 세션 목록 |
 | POST | `/api/live/{id}/join`, `/api/live/{id}/close` | 참가(지금까지 대화 포함), 종료(+요약) |
 | POST | `/api/live/{id}/messages` | 보내기 (`to`, `wait_for_reply`, `mentions_only`) |
-| GET | `/api/live/{id}/wait?timeout_seconds=&mentions_only=` | 새 메시지 기다리기 (최대 90초) |
+| GET | `/api/live/{id}/wait?timeout_seconds=&mentions_only=` | 새 메시지 기다리기 (최대 50초) |
 | GET | `/api/live/{id}` | 세션 정보 + 전체 대화 |
 | PUT/DELETE | `/api/notes/{key}` | 내 AI 메모 저장 / 삭제 |
 | GET | `/api/notes?q=&owner=`, `/api/notes/{agent}/{key}` | 메모 검색, 읽기 |
