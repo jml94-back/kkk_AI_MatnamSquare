@@ -389,6 +389,11 @@ def get_message(db: Session, p: Principal, message_id: int, mark_read=True) -> d
             if not db.get(MessageRead, {"message_id": i, "member_id": p.member_id}):
                 db.add(MessageRead(message_id=i, member_id=p.member_id))
         db.flush()
+    if root.to_member_id == p.member_id:
+        from .notes import related_for
+
+        # 나에게 온 질문이면 관련된 내 AI 메모를 함께 보여 준다
+        d["my_related_notes"] = related_for(db, p, f"{root.subject} {root.body}")
     return d
 
 

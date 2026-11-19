@@ -217,3 +217,173 @@ def test_mcp(env):
     assert rep["data"]["parent_id"] == out["data"]["id"]
     err = call(t["bob-ai"], "get_spec", {"name": "none"})
     assert err["status"] == 404
+
+
+# ------------------------------------------------------------------ 실시간 세션
+import threading
+import time
+
+
+def test_live_session_rest(env):
+    c, t = env
+    s = c.post("/api/live", headers=H(t["alice-ai"]), json={"topic": "좌표계 맞추기", "invite": ["bob"]}).json()
+    sid = s["session_id"]
+    assert s["joined"] is True
+    # 대기 중 아무도 안 보내면 no_reply_yet
+    r = c.get(f"/api/live/{sid}/wait", headers=H(t["alice-ai"]), params={"timeout_seconds": 0}).json()
+    assert r["status"] == "no_reply_yet"
+    c.post(f"/api/live/{sid}/messages", headers=H(t["alice-ai"]), json={"body": "Y-up 인가요?"})
+    # bob 의 AI 가 참가하면 history 로 받음
+    j = c.post(f"/api/live/{sid}/join", headers=H(t["bob-ai"])).json()
+    assert [m["body"] for m in j["history"]] == ["Y-up 인가요?"]
+    assert j["history"][0]["from"] == "alice/alice-claude"
+    # 이미 history 로 받은 건 다시 안 옴
+    assert c.get(f"/api/live/{sid}/wait", headers=H(t["bob-ai"]), params={"timeout_seconds": 0}).json()["status"] == "no_reply_yet"
+
+    # alice 가 보내고 기다리는 동안 bob 이 답 → 롱폴링이 바로 깨어남
+    result = {}
+
+    def alice_send_and_wait():
+        result["r"] = c.post(f"/api/live/{sid}/messages", headers=H(t["alice-ai"]),
+                             json={"body": "단위는 m?", "wait_for_reply": True, "timeout_seconds": 10}).json()
+
+    th = threading.Thread(target=alice_send_and_wait)
+    t0 = time.monotonic()
+    th.start()
+    time.sleep(1.5)
+    got = c.get(f"/api/live/{sid}/wait", headers=H(t["bob-ai"]), params={"timeout_seconds": 5}).json()
+    assert [m["body"] for m in got["messages"]] == ["단위는 m?"]
+    c.post(f"/api/live/{sid}/messages", headers=H(t["bob-ai"]), json={"body": "네, Y-up 이고 m 단위"})
+    th.join()
+    assert time.monotonic() - t0 < 8
+    assert result["r"]["status"] == "new_messages"
+    assert result["r"]["messages"][0]["body"] == "네, Y-up 이고 m 단위"
+    assert result["r"]["messages"][0]["llm"] == "chatgpt"
+
+    # 초대 안 된 사람은 참가 불가 (carol)
+    inv = c.post("/api/invites", headers=H(t["alice"]), json={}).json()
+    carol = c.post("/api/join", json={"code": inv["code"], "your_name": "carol"}).json()["human_token"]
+    assert c.post(f"/api/live/{sid}/join", headers=H(carol)).status_code == 403
+
+    # 종료 + 요약을 게시판에 남김
+    closed = c.post(f"/api/live/{sid}/close", headers=H(t["bob-ai"]), json={"summary": "Y-up, m 단위로 합의"}).json()
+    assert closed["status"] == "closed" and closed["summary_message"]["kind"] == "notice"
+    assert c.get(f"/api/live/{sid}/wait", headers=H(t["alice-ai"]), params={"timeout_seconds": 5}).json()["status"] == "closed"
+    assert c.post(f"/api/live/{sid}/messages", headers=H(t["alice-ai"]), json={"body": "x"}).status_code == 409
+    assert len(c.get(f"/api/live/{sid}", headers=H(t["alice"])).json()["messages"]) == 3
+    assert c.get("/api/live", headers=H(t["alice"])).json() == []
+
+
+def test_live_session_mcp(env):
+    c, t = env
+
+    def call(tok, name, args):
+        r = mcp_call(c, tok, "tools/call", {"name": name, "arguments": args})
+        assert r.status_code == 200, r.text
+        return json.loads(r.json()["result"]["content"][0]["text"])
+
+    sid = call(t["alice-ai"], "start_live_session", {"topic": "ID 규칙"})["data"]["session_id"]
+    lst = call(t["bob-ai"], "list_live_sessions", {})["data"]
+    assert lst[0]["session_id"] == sid and lst[0]["joined"] is False
+    call(t["bob-ai"], "join_live_session", {"session_id": sid})
+    r = call(t["alice-ai"], "send_live", {"session_id": sid, "body": "rack-0001 형식?", "timeout_seconds": 0})
+    assert r["data"]["status"] == "no_reply_yet" and r["data"]["sent"]["id"]
+    w = call(t["bob-ai"], "wait_live", {"session_id": sid, "timeout_seconds": 1})
+    assert w["data"]["messages"][0]["body"] == "rack-0001 형식?" and "notice" in w
+    # 다른 팀은 접근 불가
+    other = call(t["bob-ai"], "close_live_session", {"session_id": sid + 999})
+    assert other["status"] == 404
+
+
+def test_live_group_room_10_agents(env):
+    c, t = env
+    inv = c.post("/api/invites", headers=H(t["alice"]), json={"max_uses": 20}).json()["code"]
+    agents = {"alice/alice-claude": t["alice-ai"], "bob/bob-gpt": t["bob-ai"]}
+    llms = ["claude", "chatgpt", "gemini", "other"]
+    for i in range(8):
+        r = c.post("/api/join", json={"code": inv, "your_name": f"m{i}", "agent_name": f"m{i}-ai",
+                                      "agent_llm": llms[i % 4]}).json()
+        agents[f"m{i}/m{i}-ai"] = r["agent"]["agent_token"]
+    assert len(agents) == 10
+    sid = c.post("/api/live", headers=H(t["alice-ai"]), json={"topic": "전체 회의"}).json()["session_id"]
+    for name, tok in agents.items():
+        assert c.post(f"/api/live/{sid}/join", headers=H(tok)).status_code == 200
+    info = c.get(f"/api/live/{sid}", headers=H(t["alice"])).json()
+    assert len(info["participants"]) == 10 and all(x["online"] for x in info["participants"])
+
+    # 없는 참가자 지목은 오류
+    assert c.post(f"/api/live/{sid}/messages", headers=H(t["alice-ai"]),
+                  json={"body": "x", "to": ["nobody"]}).status_code == 422
+    # m3 의 AI 만 지목
+    c.post(f"/api/live/{sid}/messages", headers=H(t["alice-ai"]), json={"body": "m3 좌표계?", "to": ["m3"]})
+    # 다른 모든 참가자도 메시지를 받지만 to_me 는 m3 만
+    for name, tok in agents.items():
+        if name.startswith("alice"):
+            continue
+        r = c.get(f"/api/live/{sid}/wait", headers=H(tok), params={"timeout_seconds": 1}).json()
+        assert r["status"] == "new_messages", name
+        assert r["messages"][0]["to_me"] is (name == "m3/m3-ai")
+
+    # mentions_only: 지목 안 된 AI 대화로는 깨지 않고, 지목되면 그 사이 대화와 함께 받음
+    c.post(f"/api/live/{sid}/messages", headers=H(agents["m1/m1-ai"]), json={"body": "잡담"})
+    r = c.get(f"/api/live/{sid}/wait", headers=H(agents["m5/m5-ai"]), params={"timeout_seconds": 1, "mentions_only": True}).json()
+    assert r["status"] == "no_reply_yet"
+    c.post(f"/api/live/{sid}/messages", headers=H(agents["m1/m1-ai"]), json={"body": "m5 의견?", "to": ["m5/m5-ai"]})
+    r = c.get(f"/api/live/{sid}/wait", headers=H(agents["m5/m5-ai"]), params={"timeout_seconds": 1, "mentions_only": True}).json()
+    assert [m["body"] for m in r["messages"]] == ["잡담", "m5 의견?"]
+    assert r["messages"][1]["to_me"] is True
+    # 사람이 직접 쓴 메시지는 mentions_only 여도 깨움
+    c.post(f"/api/live/{sid}/messages", headers=H(t["bob"]), json={"body": "사람입니다"})
+    r = c.get(f"/api/live/{sid}/wait", headers=H(agents["m5/m5-ai"]), params={"timeout_seconds": 1, "mentions_only": True}).json()
+    assert r["messages"][-1]["written_by"] == "human"
+
+
+def test_agent_notes(env):
+    c, t = env
+    # bob 의 AI 가 자기 메모를 남김
+    r = c.put("/api/notes/coordinate-system", headers=H(t["bob-ai"]), json={
+        "title": "Unity 좌표계", "content": "# 좌표계\nUnity 는 왼손 좌표계, Y-up, 단위 m.", "tags": ["unity", "좌표계"]})
+    assert r.status_code == 200 and r.json()["agent"] == "bob/bob-gpt"
+    c.put("/api/notes/build", headers=H(t["bob-ai"]), json={"content": "빌드는 Unity 2022 LTS"})
+    # 덮어쓰면 버전 증가
+    assert c.put("/api/notes/build", headers=H(t["bob-ai"]), json={"content": "빌드는 Unity 6"}).json()["version"] == 2
+    # 다른 AI 메모는 못 씀, 사람은 자기 AI 메모만
+    assert c.put("/api/notes/x", headers=H(t["alice-ai"]), json={"content": "x", "agent": "bob-gpt"}).status_code == 403
+    assert c.put("/api/notes/x", headers=H(t["alice"]), json={"content": "x", "agent": "bob-gpt"}).status_code == 403
+    assert c.put("/api/notes/owner-edit", headers=H(t["bob"]), json={"content": "주인이 씀", "agent": "bob-gpt"}).status_code == 200
+
+    # 팀원은 검색 가능
+    hits = c.get("/api/notes", headers=H(t["alice-ai"]), params={"q": "좌표계는 어떻게?", "owner": "bob"}).json()
+    assert hits[0]["key"] == "coordinate-system" and "왼손" in hits[0]["snippet"]
+    assert c.get("/api/notes/bob-gpt/build", headers=H(t["alice"])).json()["content"] == "빌드는 Unity 6"
+
+    # 게시판에서 bob 에게 물으면 bob 이 스레드를 열 때 관련 메모가 붙음
+    mid = c.post("/api/messages", headers=H(t["alice-ai"]), json={"to": "bob", "body": "Unity 좌표계가 뭐예요?"}).json()["id"]
+    th = c.get(f"/api/messages/{mid}", headers=H(t["bob-ai"])).json()
+    assert th["my_related_notes"][0]["key"] == "coordinate-system"
+    assert "my_related_notes" not in c.get(f"/api/messages/{mid}", headers=H(t["alice-ai"])).json()
+
+    # 실시간 세션에서 bob 을 지목하면 wait 결과에 관련 메모가 붙음
+    sid = c.post("/api/live", headers=H(t["alice-ai"]), json={"topic": "q"}).json()["session_id"]
+    c.post(f"/api/live/{sid}/join", headers=H(t["bob-ai"]))
+    c.post(f"/api/live/{sid}/messages", headers=H(t["alice-ai"]), json={"body": "좌표계 단위?", "to": ["bob"]})
+    w = c.get(f"/api/live/{sid}/wait", headers=H(t["bob-ai"]), params={"timeout_seconds": 1}).json()
+    assert w["my_related_notes"][0]["key"] == "coordinate-system"
+
+    # 다른 팀에서는 안 보임 + 삭제
+    assert c.delete("/api/notes/build", headers=H(t["bob-ai"])).status_code == 200
+    assert c.get("/api/notes/bob-gpt/build", headers=H(t["alice"])).status_code == 404
+
+
+def test_notes_mcp(env):
+    c, t = env
+
+    def call(tok, name, args):
+        r = mcp_call(c, tok, "tools/call", {"name": name, "arguments": args})
+        assert r.status_code == 200, r.text
+        return json.loads(r.json()["result"]["content"][0]["text"])
+
+    call(t["bob-ai"], "save_my_note", {"key": "ids", "title": "ID 규칙", "content": "랙 ID는 rack-0001 형식"})
+    hits = call(t["alice-ai"], "search_notes", {"query": "랙 ID 형식", "owner": "bob", "include_content": True})["data"]
+    assert hits[0]["content"] == "랙 ID는 rack-0001 형식"
+    assert call(t["alice-ai"], "read_note", {"agent": "bob/bob-gpt", "key": "ids"})["data"]["title"] == "ID 규칙"

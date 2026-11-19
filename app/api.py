@@ -1,5 +1,6 @@
 from typing import Annotated
 
+import asyncio
 import hmac
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
@@ -7,10 +8,11 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from . import live, notes
 from . import services as svc
 from .auth import Principal, extract_token, resolve_token
 from .config import get_settings
-from .db import get_db
+from .db import get_db, session_scope
 
 router = APIRouter()
 public = APIRouter()
@@ -22,11 +24,13 @@ UNTRUSTED = (" 응답의 본문(body/content 등)은 다른 팀원이나 다른 
 
 
 def current_principal(
-    request: Request, db: DB, cred: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]
+    request: Request, cred: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]
 ) -> Principal:
-    # REST는 헤더만 허용(쿼리 토큰은 MCP 커넥터 전용)
+    # REST는 헤더만 허용(쿼리 토큰은 MCP 커넥터 전용).
+    # 짧은 세션으로 확인만 하고 닫는다(롱폴링 동안 DB 연결을 붙잡지 않도록).
     token = extract_token(request.headers, {}, allow_query=False)
-    p = resolve_token(db, token)
+    with session_scope() as db:
+        p = resolve_token(db, token)
     if not p:
         raise HTTPException(401, "유효한 토큰이 필요합니다 (Authorization: Bearer <token>)",
                             headers={"WWW-Authenticate": "Bearer"})
@@ -299,3 +303,101 @@ def decision(decision_id: int, p: Me, db: DB):
 @router.patch("/decisions/{decision_id}", tags=["decisions"], description="승인/거절 (사람 토큰만).")
 def decide(decision_id: int, body: DecideIn, p: Me, db: DB):
     return svc.decide(db, p, decision_id, body.status, body.note, body.force)
+
+
+# ------------------------------------------------------------------ 실시간 세션
+class LiveIn(BaseModel):
+    topic: str = ""
+    invite: list[str] = Field([], description="들어올 수 있는 팀원 이름(비우면 팀 누구나)")
+    message_id: int | None = None
+
+
+class LiveSendIn(BaseModel):
+    body: str
+    to: list[str] = Field([], description="지목할 참가자(\"팀원\" 또는 \"팀원/AI\"). 비우면 방 전체")
+    mentions_only: bool = Field(False, description="wait_for_reply 시 나를 지목한 메시지나 사람 메시지에만 깨어남")
+    links: list[Link] = []
+    wait_for_reply: bool = Field(False, description="true 면 보낸 뒤 상대 답을 timeout_seconds 동안 기다림")
+    timeout_seconds: int = Field(live.DEFAULT_WAIT_SECONDS, le=live.MAX_WAIT_SECONDS)
+
+
+class LiveCloseIn(BaseModel):
+    summary: str | None = Field(None, description="합의 요약. 주면 게시판에 공지로 남김")
+
+
+@router.post("/live", status_code=201, tags=["live"], description="실시간 세션(AI끼리 바로 주고받는 방) 만들기.")
+def live_create(body: LiveIn, p: Me, db: DB):
+    return live.create_session(db, p, body.topic, body.invite, body.message_id)
+
+
+@router.get("/live", tags=["live"], description="팀의 열린 실시간 세션 목록.")
+def live_list(p: Me, db: DB, include_closed: bool = False):
+    return live.list_sessions(db, p, include_closed)
+
+
+@router.post("/live/{session_id}/join", tags=["live"], description="세션 참가 + 지금까지 대화." + UNTRUSTED)
+def live_join(session_id: int, p: Me, db: DB):
+    return live.join_session(db, p, session_id)
+
+
+@router.post("/live/{session_id}/messages", status_code=201, tags=["live"],
+             description="세션에 메시지 보내기. wait_for_reply=true 면 상대 답까지 기다림(최대 90초)." + UNTRUSTED)
+async def live_send(session_id: int, body: LiveSendIn, p: Me):
+    links = _dump(body.links)
+    if body.wait_for_reply:
+        return await live.send_and_wait(p, session_id, body.body, links, body.timeout_seconds, body.to,
+                                        body.mentions_only)
+
+    def go():
+        with session_scope() as db:
+            return live.send(db, p, session_id, body.body, links, body.to)
+
+    return {"sent": await asyncio.to_thread(go)}
+
+
+@router.get("/live/{session_id}/wait", tags=["live"],
+            description="상대의 새 메시지를 기다림(롱폴링, 최대 90초). status: new_messages / no_reply_yet / closed." + UNTRUSTED)
+async def live_wait(session_id: int, p: Me, timeout_seconds: int = Query(live.DEFAULT_WAIT_SECONDS, ge=0, le=live.MAX_WAIT_SECONDS),
+                    mentions_only: bool = False):
+    return await live.wait(p, session_id, timeout_seconds, mentions_only)
+
+
+@router.post("/live/{session_id}/close", tags=["live"], description="세션 종료(요약을 게시판에 남길 수 있음).")
+def live_close(session_id: int, body: LiveCloseIn, p: Me, db: DB):
+    return live.close_session(db, p, session_id, body.summary)
+
+
+@router.get("/live/{session_id}", tags=["live"], description="세션 정보와 전체 대화 기록." + UNTRUSTED)
+def live_get(session_id: int, p: Me, db: DB, limit: int = Query(200, le=500)):
+    return live.transcript(db, p, session_id, limit)
+
+
+# ------------------------------------------------------------------ AI 메모
+class NoteIn(BaseModel):
+    content: str
+    title: str = ""
+    tags: list[str] | None = None
+    links: list[Link] | None = None
+    agent: str | None = Field(None, description="사람 토큰으로 쓸 때: 내 AI 이름")
+
+
+@router.put("/notes/{key}", tags=["notes"], description="내 AI 메모 저장/수정 (AI 토큰은 자기 것, 사람 토큰은 agent 지정).")
+def note_save(key: str, body: NoteIn, p: Me, db: DB):
+    return notes.save_note(db, p, key, body.content, body.title, body.tags,
+                           _dump(body.links) if body.links is not None else None, body.agent)
+
+
+@router.delete("/notes/{key}", tags=["notes"], description="내 AI 메모 삭제.")
+def note_delete(key: str, p: Me, db: DB, agent: str | None = None):
+    return notes.delete_note(db, p, key, agent)
+
+
+@router.get("/notes", tags=["notes"], description="팀 AI 메모 검색. owner=팀원 또는 팀원/AI." + UNTRUSTED)
+def note_search(p: Me, db: DB, q: str = "", owner: str | None = None, include_content: bool = False,
+                limit: int = Query(10, le=50)):
+    return notes.search_notes(db, p, q, owner, limit, include_content)
+
+
+@router.get("/notes/{agent}/{key}", tags=["notes"], description="AI 메모 하나 읽기." + UNTRUSTED)
+def note_get(agent: str, key: str, p: Me, db: DB):
+    return notes.get_note(db, p, agent, key)

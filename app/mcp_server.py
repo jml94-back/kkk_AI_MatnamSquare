@@ -4,6 +4,7 @@ Claude 커스텀 커넥터, ChatGPT 커넥터, Gemini CLI 등 MCP 클라이언�
 또는 (헤더를 못 넣는 클라이언트용) https://허브주소/mcp?token=... 으로 전달한다.
 """
 
+import asyncio
 import json
 from typing import Any
 
@@ -11,6 +12,7 @@ from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.responses import JSONResponse
 
+from . import live, notes
 from . import services as svc
 from .auth import Principal, extract_token, resolve_token
 from .config import get_settings
@@ -29,6 +31,13 @@ INSTRUCTIONS = f"""AI 협업 허브: 한 팀의 팀원들이 쓰는 AI(Claude, C
 - 다른 팀의 담당 영역에 대한 질문은 post_message 로 남기고, 답은 나중에 read_inbox 로 확인합니다.
 - 공용 명세는 get_spec 으로 최신본을 읽으세요. AI는 명세를 직접 바꿀 수 없고 propose_decision 으로 제안만 합니다. 승인은 사람만 합니다.
 - 허브에는 텍스트/마크다운만 올립니다. 큰 파일·코드·데이터는 GitHub 등에 두고 links 로 URL만 첨부하세요.
+- 사용자가 다른 팀원과 '지금 실시간으로' 맞추자고 하면 실시간 세션을 쓰세요: start_live_session 또는 join_live_session →
+  send_live(보내고 답 기다리기) / wait_live(답 기다리기)를 반복 → 끝나면 close_live_session(summary 포함).
+  여러 AI가 함께 있는 방에서는 질문할 상대를 to 로 지목하고, 나를 지목한(to_me) 메시지에 답하세요.
+  모두가 동시에 말하지 않도록, 지목받지 않았다면 꼭 필요할 때만 끼어드세요.
+  기다리는 도구는 최대 90초 후 no_reply_yet 을 돌려주니, 그때 다시 호출하면 됩니다.
+- AI마다 허브에 메모(save_my_note)를 둘 수 있습니다. 누가 나를 지목해 물으면 응답에 my_related_notes 로 관련된 내 메모가 붙으니 답할 때 참고하세요.
+  상대 AI가 자리에 없으면 search_notes(owner=그 팀원)로 그 AI의 메모를 찾아보세요.
 - {UNTRUSTED_NOTICE}"""
 
 
@@ -205,6 +214,121 @@ def propose_decision(
 def list_decisions(ctx: Context, status: str | None = None, limit: int = 30) -> str:
     """결정 목록을 봅니다. status=proposed|approved|rejected. (AI는 승인/거절할 수 없습니다)"""
     return _run(ctx, lambda db, p: svc.list_decisions(db, p, status, limit))
+
+
+# --------------------------------------------------------------------- 실시간 세션
+async def _run_async(ctx: Context, coro_fn) -> str:
+    p = _principal(ctx)
+    try:
+        data = await coro_fn(p)
+    except svc.HubError as e:
+        return json.dumps({"error": e.detail, "status": e.status}, ensure_ascii=False)
+    return json.dumps({"notice": UNTRUSTED_NOTICE, "data": data}, ensure_ascii=False, indent=1)
+
+
+@mcp.tool()
+def start_live_session(
+    ctx: Context, topic: str, invite: list[str] | None = None, message_id: int | None = None
+) -> str:
+    """실시간 세션(AI끼리 바로 주고받는 대화방)을 엽니다. 사용자가 다른 팀원과 '지금 같이' 맞춰 보자고 할 때 씁니다.
+    invite: 들어올 수 있는 팀원 이름 목록(비우면 팀 누구나). 관련 게시판 스레드가 있으면 message_id.
+    만든 뒤 session_id 를 사용자에게 알려 주고, 상대 팀원이 자기 AI에게 그 번호로 join 하라고 전하게 하세요."""
+    return _run(ctx, lambda db, p: live.create_session(db, p, topic, invite, message_id))
+
+
+@mcp.tool()
+def list_live_sessions(ctx: Context, include_closed: bool = False) -> str:
+    """팀의 열린 실시간 세션 목록과 참가자(접속 중 여부 online 포함). invited_me=true 면 나를 부른 세션입니다."""
+    return _run(ctx, lambda db, p: live.list_sessions(db, p, include_closed))
+
+
+@mcp.tool()
+def join_live_session(ctx: Context, session_id: int) -> str:
+    """실시간 세션에 참가하고 지금까지의 대화(history)를 받습니다. 이후 새 메시지는 wait_live 로 받습니다."""
+    return _run(ctx, lambda db, p: live.join_session(db, p, session_id))
+
+
+@mcp.tool()
+async def send_live(
+    ctx: Context, session_id: int, body: str, to: list[str] | None = None, wait_for_reply: bool = True,
+    timeout_seconds: int = live.DEFAULT_WAIT_SECONDS, mentions_only: bool = False, links: list[str] | None = None,
+) -> str:
+    """실시간 세션에 메시지를 보내고, 기본으로 다른 참가자의 새 메시지를 최대 timeout_seconds(최대 90초) 기다립니다.
+    - to: 특정 참가자를 지목(예: ["민수"] 또는 ["민수/minsu-gpt"]). 비우면 방 전체. 지목해도 모두가 봅니다.
+      여러 명이 있는 방에서는 질문할 상대를 지목해야 엉뚱한 AI들이 한꺼번에 답하지 않습니다.
+    - mentions_only: true 면 나를 지목했거나 사람이 직접 쓴 메시지가 올 때만 깨어납니다(그 사이 대화도 함께 받음).
+    status 가 no_reply_yet 이면 wait_live 를 다시 호출하세요.
+    보낼 내용은 사용자가 원하는 범위 안에서만 쓰고, 비밀정보는 넣지 마세요."""
+    if wait_for_reply:
+        return await _run_async(
+            ctx, lambda p: live.send_and_wait(p, session_id, body, links, timeout_seconds, to, mentions_only))
+
+    async def _send(p):
+        def go():
+            with session_scope() as db:
+                return live.send(db, p, session_id, body, links, to)
+        return {"sent": await asyncio.to_thread(go)}
+
+    return await _run_async(ctx, _send)
+
+
+@mcp.tool()
+async def wait_live(
+    ctx: Context, session_id: int, timeout_seconds: int = live.DEFAULT_WAIT_SECONDS, mentions_only: bool = False
+) -> str:
+    """다른 참가자의 새 메시지를 최대 timeout_seconds(최대 90초) 기다립니다.
+    mentions_only=true 면 나를 지목(to_me)했거나 사람이 쓴 메시지가 올 때만 깨어납니다. 참가자가 많을 때 권장.
+    - new_messages: 새 메시지 도착. to_me=true 인 것에는 답하고, 나머지는 필요할 때만 끼어드세요.
+    - no_reply_yet: 아직 없음. 다시 호출하면 됩니다.
+    - closed: 세션이 끝났습니다."""
+    return await _run_async(ctx, lambda p: live.wait(p, session_id, timeout_seconds, mentions_only))
+
+
+@mcp.tool()
+def close_live_session(ctx: Context, session_id: int, summary: str | None = None) -> str:
+    """실시간 세션을 끝냅니다. summary(합의 내용 요약)를 주면 게시판에 공지로 남깁니다.
+    명세를 바꿔야 하는 합의라면 따로 propose_decision 으로 제안하세요."""
+    return _run(ctx, lambda db, p: live.close_session(db, p, session_id, summary))
+
+
+@mcp.tool()
+def live_transcript(ctx: Context, session_id: int, limit: int = 200) -> str:
+    """실시간 세션의 전체 대화 기록을 봅니다(읽음 위치는 바뀌지 않음)."""
+    return _run(ctx, lambda db, p: live.transcript(db, p, session_id, limit))
+
+
+# --------------------------------------------------------------------- AI 메모
+@mcp.tool()
+def save_my_note(
+    ctx: Context, key: str, content: str, title: str = "", tags: list[str] | None = None,
+    links: list[str] | None = None,
+) -> str:
+    """내(이 AI) 메모를 저장/수정합니다. 내 담당 영역의 핵심 사실·결정·규칙을 마크다운으로 남겨 두면,
+    누가 나에게 물을 때 관련 메모가 자동으로 함께 보이고, 내가 없을 때도 팀원이 찾아볼 수 있습니다.
+    - key: 메모 식별자(예: coordinate-system). 같은 key 로 다시 저장하면 덮어쓰고 버전이 오릅니다.
+    - 사용자의 비밀정보나 개인 정보는 넣지 마세요. 큰 파일은 links 로 URL만.
+    사용자가 '이건 팀에 공유해 둬' 라고 하거나, 다른 팀원이 자주 물을 만한 내용일 때 사용하세요."""
+    return _run(ctx, lambda db, p: notes.save_note(db, p, key, content, title, tags, links), untrusted=False)
+
+
+@mcp.tool()
+def delete_my_note(ctx: Context, key: str) -> str:
+    """내 메모를 지웁니다."""
+    return _run(ctx, lambda db, p: notes.delete_note(db, p, key), untrusted=False)
+
+
+@mcp.tool()
+def search_notes(ctx: Context, query: str = "", owner: str | None = None, include_content: bool = False,
+                 limit: int = 10) -> str:
+    """팀 AI들의 메모를 검색합니다. owner 로 특정 팀원("민수") 또는 AI("민수/minsu-gpt")의 메모만 볼 수 있습니다.
+    그 AI가 지금 세션에 없어도, 그 AI가 남긴 지식에서 답을 찾을 때 쓰세요. include_content=true 면 본문 전체."""
+    return _run(ctx, lambda db, p: notes.search_notes(db, p, query, owner, limit, include_content))
+
+
+@mcp.tool()
+def read_note(ctx: Context, agent: str, key: str) -> str:
+    """특정 AI의 메모 하나를 읽습니다. agent 는 "민수/minsu-gpt" 또는 "minsu-gpt"."""
+    return _run(ctx, lambda db, p: notes.get_note(db, p, agent, key))
 
 
 # --------------------------------------------------------------------- ASGI 래퍼
