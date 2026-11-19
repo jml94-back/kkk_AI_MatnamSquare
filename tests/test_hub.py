@@ -387,3 +387,75 @@ def test_notes_mcp(env):
     hits = call(t["alice-ai"], "search_notes", {"query": "랙 ID 형식", "owner": "bob", "include_content": True})["data"]
     assert hits[0]["content"] == "랙 ID는 rack-0001 형식"
     assert call(t["alice-ai"], "read_note", {"agent": "bob/bob-gpt", "key": "ids"})["data"]["title"] == "ID 규칙"
+
+
+# ------------------------------------------------------------------ OAuth (claude.ai 커넥터)
+import base64
+import hashlib
+from urllib.parse import parse_qs, urlparse
+
+
+def _pkce():
+    verifier = "v" * 50
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+    return verifier, challenge
+
+
+def test_oauth_flow(env):
+    c, t = env
+    # 토큰 없이 /mcp → 401 + 메타데이터 위치
+    r = mcp_call(c, "", "tools/list", via_query=True)
+    assert r.status_code == 401
+    assert 'resource_metadata="http://testserver/.well-known/oauth-protected-resource"' in r.headers["www-authenticate"]
+
+    pr = c.get("/.well-known/oauth-protected-resource").json()
+    assert pr["resource"] == "http://testserver/mcp" and pr["authorization_servers"] == ["http://testserver"]
+    assert c.get("/.well-known/oauth-protected-resource/mcp").status_code == 200
+    asm = c.get("/.well-known/oauth-authorization-server").json()
+    assert asm["code_challenge_methods_supported"] == ["S256"]
+
+    cb = "https://claude.ai/api/mcp/auth_callback"
+    assert c.post("/register", json={"redirect_uris": ["https://evil.example/cb"]}).status_code == 400
+    reg = c.post("/register", json={"redirect_uris": [cb], "client_name": "Claude"})
+    assert reg.status_code == 201
+    cid = reg.json()["client_id"]
+
+    verifier, challenge = _pkce()
+    q = {"response_type": "code", "client_id": cid, "redirect_uri": cb, "state": "st1",
+         "code_challenge": challenge, "code_challenge_method": "S256"}
+    page = c.get("/authorize", params=q)
+    assert page.status_code == 200 and "huba_" in page.text
+    assert c.get("/authorize", params={**q, "redirect_uri": "https://evil.example/cb"}).status_code == 400
+
+    # 사람 토큰·틀린 토큰은 거절
+    assert c.post("/authorize", data={**q, "hub_token": t["alice"]}, follow_redirects=False).status_code == 400
+    assert c.post("/authorize", data={**q, "hub_token": "huba_wrong"}, follow_redirects=False).status_code == 400
+
+    r = c.post("/authorize", data={**q, "hub_token": t["alice-ai"]}, follow_redirects=False)
+    assert r.status_code == 302
+    loc = urlparse(r.headers["location"])
+    assert f"{loc.scheme}://{loc.netloc}{loc.path}" == cb
+    params = parse_qs(loc.query)
+    assert params["state"] == ["st1"]
+    code = params["code"][0]
+
+    # PKCE 틀리면 실패, 코드는 한 번만
+    bad = c.post("/token", data={"grant_type": "authorization_code", "code": code, "code_verifier": "x" * 50,
+                                 "redirect_uri": cb})
+    assert bad.status_code == 400
+    r = c.post("/authorize", data={**q, "hub_token": t["alice-ai"]}, follow_redirects=False)
+    code = parse_qs(urlparse(r.headers["location"]).query)["code"][0]
+    tok = c.post("/token", data={"grant_type": "authorization_code", "code": code, "code_verifier": verifier,
+                                 "redirect_uri": cb, "client_id": cid})
+    assert tok.status_code == 200, tok.text
+    access = tok.json()["access_token"]
+    assert c.post("/token", data={"grant_type": "authorization_code", "code": code,
+                                  "code_verifier": verifier}).status_code == 400
+
+    r = mcp_call(c, access, "tools/call", {"name": "whoami", "arguments": {}})
+    assert r.status_code == 200
+    assert json.loads(r.json()["result"]["content"][0]["text"])["data"]["agent"] == "alice-claude"
+
+    ref = c.post("/token", data={"grant_type": "refresh_token", "refresh_token": tok.json()["refresh_token"]})
+    assert ref.status_code == 200
+    assert c.post("/token", data={"grant_type": "refresh_token", "refresh_token": "huba_wrong"}).status_code == 400

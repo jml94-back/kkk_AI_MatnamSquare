@@ -11,6 +11,7 @@ from .api import public, router
 from .config import get_settings
 from .db import create_all
 from .mcp_server import build_mcp_asgi, mcp
+from .oauth import router as oauth_router
 
 
 @asynccontextmanager
@@ -56,6 +57,7 @@ def join_page():
     return _JOIN_HTML
 
 
+app.include_router(oauth_router)
 app.include_router(public, prefix="/api")
 app.include_router(router, prefix="/api")
 

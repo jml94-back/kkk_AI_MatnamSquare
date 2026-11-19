@@ -370,14 +370,53 @@ def build_mcp_asgi():
                 req.headers.get("user-agent", "-")[:80],
             )
             if p is None:
-                resp = JSONResponse({"error": "유효한 토큰이 필요합니다"}, status_code=401,
-                                    headers={"WWW-Authenticate": "Bearer"})
+                from .oauth import resource_metadata_url
+
+                resp = JSONResponse({"error": "유효한 토큰이 필요합니다"}, status_code=401, headers={
+                    "WWW-Authenticate": f'Bearer resource_metadata="{resource_metadata_url(req)}"'})
                 await resp(scope, receive, send)
                 return
             scope.setdefault("state", {})["hub_principal"] = p
             if scope["path"] != "/mcp":
                 scope = {**scope, "path": "/mcp"}
-            await inner(scope, receive, send)
+
+            # 응답 상태와 JSON-RPC 메서드를 기록 (본문 내용은 남기지 않음)
+            body = b""
+            more = True
+            while more and scope.get("method") == "POST":
+                msg = await receive()
+                body += msg.get("body", b"")
+                more = msg.get("more_body", False)
+            rpc = "-"
+            if body:
+                try:
+                    parsed = json.loads(body)
+                    items = parsed if isinstance(parsed, list) else [parsed]
+                    rpc = ",".join(str(i.get("method", "result")) for i in items if isinstance(i, dict))
+                except ValueError:
+                    rpc = "invalid-json"
+            sent_body = scope.get("method") != "POST"
+
+            async def replay():
+                nonlocal sent_body
+                if not sent_body:
+                    sent_body = True
+                    return {"type": "http.request", "body": body, "more_body": False}
+                return await receive()
+
+            status = {"code": 0}
+
+            async def send_wrap(message):
+                if message["type"] == "http.response.start":
+                    status["code"] = message["status"]
+                    _log.info(
+                        "mcp -> %s rpc=%s accept=%s ctype=%s proto=%s",
+                        message["status"], rpc, req.headers.get("accept", "-"),
+                        req.headers.get("content-type", "-"), req.headers.get("mcp-protocol-version", "-"),
+                    )
+                await send(message)
+
+            await inner(scope, replay, send_wrap)
             return
         if scope["type"] == "lifespan":
             await inner(scope, receive, send)
