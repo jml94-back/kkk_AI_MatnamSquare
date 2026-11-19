@@ -1,7 +1,7 @@
 """실시간(동기) 세션.
 
 두 팀원이 각자 AI와 대화하는 동안, AI끼리 같은 방에서 메시지를 주고받는다.
-채팅 앱은 도구 호출이 오래 걸리면 끊기므로 '답 기다리기'는 롱폴링으로 최대 ~90초만 기다리고,
+채팅 앱은 도구 호출이 오래 걸리면 끊기므로 '답 기다리기'는 롱폴링으로 최대 ~50초만 기다리고,
 답이 없으면 no_reply_yet 을 돌려 AI가 다시 호출하게 한다.
 """
 
@@ -18,7 +18,7 @@ from .services import HubError, _check_len, _clean_links, _iso, _member_by_name,
 
 MAX_PARTICIPANTS = 30  # 사람·AI 합쳐서 (10명 + 각자 AI 여러 개 정도 여유)
 ONLINE_SECONDS = 150  # 최근 이만큼 안에 wait/send 했으면 접속 중으로 표시
-MAX_WAIT_SECONDS = 90  # Cloudflare 100초 제한, 채팅 앱 도구 타임아웃보다 짧게
+MAX_WAIT_SECONDS = 50  # Claude 등 채팅 앱의 MCP 도구 타임아웃(60초)보다 짧게. 더 긴 값은 잘라서 씀
 DEFAULT_WAIT_SECONDS = 45
 POLL_INTERVAL = 1.0
 IDLE_CLOSE_HOURS = 12  # 이 시간 동안 조용하면 자동 종료
