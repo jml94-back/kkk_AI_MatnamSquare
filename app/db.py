@@ -41,6 +41,26 @@ def create_all():
     from . import models  # noqa: F401
 
     Base.metadata.create_all(get_engine())
+    _add_missing_columns()
+
+
+# 이미 만들어진 DB에 나중에 추가된 컬럼 (create_all 은 기존 테이블에 컬럼을 추가하지 않는다)
+_LATE_COLUMNS = {
+    "message": {"wake_depth": "INTEGER NOT NULL DEFAULT 0", "auto_via": "VARCHAR(16)"},
+}
+
+
+def _add_missing_columns():
+    from sqlalchemy import inspect, text
+
+    eng = get_engine()
+    insp = inspect(eng)
+    with eng.begin() as conn:
+        for table, cols in _LATE_COLUMNS.items():
+            have = {c["name"] for c in insp.get_columns(table)}
+            for name, ddl in cols.items():
+                if name not in have:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
 
 
 @contextmanager

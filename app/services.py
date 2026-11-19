@@ -75,15 +75,21 @@ def _member_by_name(db: Session, team_id: int, name: str) -> Member:
 
 # ---------------------------------------------------------------- 팀원
 def list_members(db: Session, p: Principal) -> list[dict]:
+    from . import wake
+    from .models import WakeConfig
+
     rows = db.scalars(
         select(Member).where(Member.team_id == p.team_id, Member.active.is_(True)).order_by(Member.name)
     ).all()
+    cfgs = {c.member_id: c for c in db.scalars(select(WakeConfig).where(WakeConfig.team_id == p.team_id))}
     return [
         {
             "name": m.name,
             "area": m.area,
             "is_admin": m.is_admin,
             "agents": [{"name": a.name, "llm": a.llm} for a in m.agents if a.active],
+            # 이 사람의 AI가 언제·어떻게 답하는지 (None 이면 주인이 대화창을 열 때만)
+            "ai_responds": wake.public_summary(cfgs.get(m.id)),
         }
         for m in rows
     ]
@@ -243,6 +249,7 @@ def message_to_dict(db: Session, m: Message, viewer: Principal | None = None, wi
         "from_agent": m.sender_agent.name if m.sender_agent else None,
         "from_llm": m.sender_agent.llm if m.sender_agent else None,
         "written_by": "ai" if m.sender_agent_id else "human",
+        "auto": m.auto_via,
         "to": m.to_member.name if m.to_member else None,
         "spec_refs": [{"spec": v.spec.name, "version": v.version} for v in m.spec_refs],
         "created_at": _iso(m.created_at),
@@ -306,10 +313,14 @@ def create_message(
         links=_clean_links(links),
     )
     m.spec_refs = _resolve_spec_refs(db, p.team_id, spec_refs)
+    from . import wake
+
+    m.wake_depth = wake.depth_for_sender(db, p)
     db.add(m)
     db.flush()
     db.add(MessageRead(message_id=m.id, member_id=p.member_id))  # 내가 쓴 건 읽음 처리
     db.flush()
+    wake.enqueue_for_message(db, m)
     db.refresh(m)
     return message_to_dict(db, m, p)
 
@@ -360,6 +371,9 @@ def list_messages(
 
 def inbox(db: Session, p: Principal, *, include_read=False, limit=50) -> list[dict]:
     """나(팀원) 또는 팀 전체에게 온 스레드 중 열린 것 + 내 글에 새 답글이 달린 스레드."""
+    from . import wake
+
+    wake.mark_checked(db, p)
     items = list_messages(db, p, to=p.member_name, unread_only=not include_read, limit=limit)
     seen = {m["id"] for m in items}
     # 내가 쓴 글에 달린 안 읽은 답글
@@ -397,7 +411,9 @@ def get_message(db: Session, p: Principal, message_id: int, mark_read=True) -> d
     return d
 
 
-def reply(db: Session, p: Principal, message_id: int, body: str, spec_refs=None, status: str | None = None, links=None) -> dict:
+def reply(db: Session, p: Principal, message_id: int, body: str, spec_refs=None, status: str | None = None, links=None,
+          *, auto_via: str | None = None, wake_depth: int | None = None) -> dict:
+    """답글. auto_via/wake_depth 는 허브 대리 응답기가 쓸 때만 (외부 API로는 받지 않음)."""
     parent = _team_message(db, p, message_id)
     if not parent:
         raise HubError(404, "메시지가 없습니다")
@@ -418,17 +434,23 @@ def reply(db: Session, p: Principal, message_id: int, body: str, spec_refs=None,
         tags=[],
         links=_clean_links(links),
         status="open",
+        auto_via=auto_via,
     )
     r.spec_refs = _resolve_spec_refs(db, p.team_id, spec_refs)
+    from . import wake
+
+    r.wake_depth = wake_depth if wake_depth is not None else wake.depth_for_sender(db, p)
     db.add(r)
     db.flush()
     db.add(MessageRead(message_id=r.id, member_id=p.member_id))
     if status:
         _set_status(parent, status)
-    elif parent.status == "open" and parent.sender_member_id != p.member_id:
+    elif parent.status == "open" and parent.sender_member_id != p.member_id and not auto_via:
+        # 자동 답글은 '답변됨'으로 바꾸지 않는다 (주인이 아직 확인하지 않았으므로)
         parent.status = "answered"
     parent.updated_at = datetime.now(UTC)
     db.flush()
+    wake.enqueue_for_message(db, r)
     db.refresh(r)
     return message_to_dict(db, r, p)
 
