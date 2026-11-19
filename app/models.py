@@ -262,14 +262,14 @@ class WakeConfig(Base):
     team_id: Mapped[int] = mapped_column(ForeignKey("team.id"), index=True)
     member_id: Mapped[int] = mapped_column(ForeignKey("member.id"), unique=True)
     agent_id: Mapped[int] = mapped_column(ForeignKey("agent.id"), index=True)
-    mode: Mapped[str] = mapped_column(String(20))  # claude_routine / responder
+    mode: Mapped[str] = mapped_column(String(20))  # claude_routine / responder / scheduled
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     on_direct: Mapped[bool] = mapped_column(Boolean, default=True)  # 나에게 온 새 글
     on_replies: Mapped[bool] = mapped_column(Boolean, default=True)  # 내가 참여한 스레드의 새 답글
     on_broadcast: Mapped[bool] = mapped_column(Boolean, default=False)  # 팀 전체 공지
     routine_url: Mapped[str | None] = mapped_column(String(300), nullable=True)
     provider: Mapped[str | None] = mapped_column(String(16), nullable=True)  # anthropic / openai / gemini
-    model: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    model: Mapped[str | None] = mapped_column(String(100), nullable=True)  # scheduled 방식에서는 주기(hourly 등)
     instructions: Mapped[str] = mapped_column(Text, default="")
     secret_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
     max_per_hour: Mapped[int] = mapped_column(Integer, default=10)
@@ -277,6 +277,10 @@ class WakeConfig(Base):
     active_depth: Mapped[int] = mapped_column(Integer, default=0)
     active_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_fired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # 이 사람의 AI가 마지막으로 inbox 를 확인한 시각 (scheduled 방식이 실제로 도는지 확인용)
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # scheduled: 답하는 Claude 프로젝트 이름 (표시용)
+    project_label: Mapped[str | None] = mapped_column(String(100), nullable=True)
     last_error: Mapped[str] = mapped_column(Text, default="")
     last_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)

@@ -75,15 +75,21 @@ def _member_by_name(db: Session, team_id: int, name: str) -> Member:
 
 # ---------------------------------------------------------------- 팀원
 def list_members(db: Session, p: Principal) -> list[dict]:
+    from . import wake
+    from .models import WakeConfig
+
     rows = db.scalars(
         select(Member).where(Member.team_id == p.team_id, Member.active.is_(True)).order_by(Member.name)
     ).all()
+    cfgs = {c.member_id: c for c in db.scalars(select(WakeConfig).where(WakeConfig.team_id == p.team_id))}
     return [
         {
             "name": m.name,
             "area": m.area,
             "is_admin": m.is_admin,
             "agents": [{"name": a.name, "llm": a.llm} for a in m.agents if a.active],
+            # 이 사람의 AI가 언제·어떻게 답하는지 (None 이면 주인이 대화창을 열 때만)
+            "ai_responds": wake.public_summary(cfgs.get(m.id)),
         }
         for m in rows
     ]
@@ -365,6 +371,9 @@ def list_messages(
 
 def inbox(db: Session, p: Principal, *, include_read=False, limit=50) -> list[dict]:
     """나(팀원) 또는 팀 전체에게 온 스레드 중 열린 것 + 내 글에 새 답글이 달린 스레드."""
+    from . import wake
+
+    wake.mark_checked(db, p)
     items = list_messages(db, p, to=p.member_name, unread_only=not include_read, limit=limit)
     seen = {m["id"] for m in items}
     # 내가 쓴 글에 달린 안 읽은 답글

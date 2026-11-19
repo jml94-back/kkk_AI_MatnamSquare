@@ -35,7 +35,11 @@ from .services import HubError, _iso
 
 log = logging.getLogger("hub.wake")
 
-MODES = {"claude_routine", "responder"}
+MODES = {"claude_routine", "responder", "scheduled"}
+# scheduled: 팀원의 AI가 스스로 정해진 주기로 허브를 확인한다 (예: Claude Cowork 예약 작업 매시간).
+# 허브는 아무것도 호출하지 않고, 그 AI가 마지막으로 inbox 를 확인한 시각만 기록해 보여 준다.
+# Cowork 작업은 채팅(또는 그 프로젝트의) 메모리를 쓰므로, '진짜 내 Claude 기억'으로 답하게 하는 현재 유일한 Claude 경로다.
+SCHEDULE_LABELS = {"hourly": "매시간", "daily": "매일", "weekdays": "평일", "manual": "수동"}
 PROVIDERS = {"anthropic", "openai", "gemini"}
 DEFAULT_MODELS = {"anthropic": "claude-opus-5-5"}
 # 서버 쪽 거절 대체(fallbacks)를 받는 Claude 모델
@@ -107,6 +111,8 @@ def config_to_dict(db: Session, c: WakeConfig, with_jobs: bool = True) -> dict:
     }
     if c.mode == "claude_routine":
         d["routine_url"] = c.routine_url
+    elif c.mode == "scheduled":
+        d.update(schedule=c.model or "hourly", project=c.project_label, last_checked_at=_iso(c.last_checked_at))
     else:
         d.update(provider=c.provider, model=c.model, instructions=c.instructions)
     if with_jobs:
@@ -136,6 +142,7 @@ def get_wake(db: Session, p: Principal) -> dict:
 
 def set_wake(
     db: Session, p: Principal, *, mode: str, agent: str | None = None, enabled: bool = True,
+    schedule: str | None = None, project: str | None = None,
     routine_url: str | None = None, routine_token: str | None = None,
     provider: str | None = None, model: str | None = None, api_key: str | None = None,
     instructions: str | None = None, on_direct: bool = True, on_replies: bool = True,
@@ -175,6 +182,14 @@ def set_wake(
         elif changed_kind or url != c.routine_url:
             raise HubError(422, "루틴 토큰(routine_token)이 필요합니다")
         c.routine_url, c.provider, c.model = url, None, None
+    elif mode == "scheduled":
+        sch = schedule or (c.model if c.mode == "scheduled" else None) or "hourly"
+        if sch not in SCHEDULE_LABELS:
+            raise HubError(422, f"schedule 은 {sorted(SCHEDULE_LABELS)} 중 하나여야 합니다")
+        # 비밀값이 필요 없는 방식이므로 예전 토큰/키는 지운다
+        c.routine_url, c.provider, c.model, c.secret_enc = None, None, sch, None
+        if project is not None:
+            c.project_label = project.strip()[:100] or None
     else:
         prov = (provider or c.provider or "").lower()
         if prov not in PROVIDERS:
@@ -211,6 +226,28 @@ def delete_wake(db: Session, p: Principal) -> dict:
     return {"deleted": True}
 
 
+def mark_checked(db: Session, p: Principal):
+    """AI가 inbox 를 확인할 때마다 기록 (예약 확인 방식이 실제로 돌고 있는지 보여 주려고)."""
+    if p.agent_id is None:
+        return
+    c = db.scalar(select(WakeConfig).where(WakeConfig.member_id == p.member_id, WakeConfig.agent_id == p.agent_id))
+    if c:
+        c.last_checked_at = _now()
+
+
+def public_summary(c: WakeConfig | None) -> dict | None:
+    """팀원 목록에 보여 줄 '이 사람의 AI는 언제·무엇으로 답하나' (비밀값 없음)."""
+    if not c or not c.enabled:
+        return None
+    if c.mode == "scheduled":
+        return {"mode": "scheduled", "agent": c.agent.name, "schedule": c.model or "hourly",
+                "project": c.project_label, "last_checked_at": _iso(c.last_checked_at),
+                "expect": f"{SCHEDULE_LABELS.get(c.model or 'hourly', '')} 확인, 주인의 Claude 기억으로 답함"}
+    if c.mode == "claude_routine":
+        return {"mode": "claude_routine", "agent": c.agent.name, "expect": "몇 분 안 (Claude 루틴)"}
+    return {"mode": "responder", "agent": c.agent.name, "expect": "바로 (허브 대리 응답, AI 메모 근거)"}
+
+
 # ------------------------------------------------------------------ 메시지 → 작업
 def depth_for_sender(db: Session, p: Principal) -> int:
     """지금 쓰는 글의 연쇄 깊이. 루틴으로 깨어난 AI 세션이 쓴 글이면 그 깊이를 물려받는다."""
@@ -245,7 +282,8 @@ def enqueue_for_message(db: Session, m: Message) -> int:
     targets.pop(m.sender_member_id, None)
     if not targets:
         return 0
-    cfgs = db.scalars(select(WakeConfig).where(WakeConfig.member_id.in_(targets), WakeConfig.enabled.is_(True))).all()
+    cfgs = db.scalars(select(WakeConfig).where(WakeConfig.member_id.in_(targets), WakeConfig.enabled.is_(True),
+                                               WakeConfig.mode != "scheduled")).all()
     n = 0
     for c in cfgs:
         reason = targets[c.member_id]
@@ -455,6 +493,9 @@ def _process_one(jid: int, now: datetime) -> int:
             _finish(j, "skipped", "깨우기 꺼짐")
             return 1
         mode = c.mode
+        if mode == "scheduled":
+            _finish(j, "skipped", "예약 확인 방식 (허브가 깨우지 않음)")
+            return 1
     return _run_routine(jid, now) if mode == "claude_routine" else _run_responder(jid, now)
 
 
@@ -596,6 +637,8 @@ def test_wake(p: Principal) -> dict:
             raise HubError(404, "깨우기 설정이 없습니다")
         mode, url, secret_enc, provider, model = c.mode, c.routine_url, c.secret_enc, c.provider, c.model
         member = c.member.name
+    if mode == "scheduled":
+        return {"ok": True, "note": "예약 확인 방식은 허브가 호출하지 않습니다. Cowork 예약 작업에서 '지금 실행'을 눌러 확인하세요."}
     try:
         secret = _decrypt(secret_enc)
         if mode == "claude_routine":

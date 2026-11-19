@@ -159,3 +159,25 @@ def test_rate_limit_and_errors(env, fake, monkeypatch):
     assert jobs()[-1][1] == "failed"
     assert "bad key" in c.get("/api/wake", headers=H(t["bob"])).json()["last_error"]
     assert c.post("/api/wake/test", headers=H(t["bob"])).json() == {"ok": False, "error": "LLM 호출 거부 401: bad key"}
+
+
+def test_scheduled_mode(env, fake):
+    """Cowork 예약 확인: 허브는 깨우지 않고, AI가 inbox 를 확인한 시각과 응답 방식을 보여 준다."""
+    c, t = env
+    r = c.put("/api/wake", headers=H(t["alice"]), json={"mode": "scheduled", "project": "물류 시뮬레이션"})
+    assert r.status_code == 200, r.text
+    assert r.json()["schedule"] == "hourly" and r.json()["last_checked_at"] is None
+    assert c.put("/api/wake", headers=H(t["alice"]), json={"mode": "scheduled", "schedule": "every-minute"}).status_code == 422
+    c.post("/api/messages", headers=H(t["bob"]), json={"body": "질문", "to": "alice"})
+    wake.process_due(later())
+    assert fake["http"] == [] and fake["llm"] == [] and jobs() == []
+    members = {m["name"]: m for m in c.get("/api/members", headers=H(t["bob"])).json()}
+    info = members["alice"]["ai_responds"]
+    assert info["mode"] == "scheduled" and info["project"] == "물류 시뮬레이션" and info["agent"] == "alice-claude"
+    assert members["bob"]["ai_responds"] is None
+    # 사람이 inbox 를 봐도 기록 안 됨, AI가 보면 기록
+    c.get("/api/inbox", headers=H(t["alice"]))
+    assert c.get("/api/wake", headers=H(t["alice"])).json()["last_checked_at"] is None
+    c.get("/api/inbox", headers=H(t["alice-ai"]))
+    assert c.get("/api/wake", headers=H(t["alice"])).json()["last_checked_at"]
+    assert c.post("/api/wake/test", headers=H(t["alice"])).json()["ok"] is True

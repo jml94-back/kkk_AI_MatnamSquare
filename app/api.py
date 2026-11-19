@@ -405,9 +405,12 @@ def note_get(agent: str, key: str, p: Me, db: DB):
 
 # ------------------------------------------------------------------ AI 깨우기
 class WakeIn(BaseModel):
-    mode: str = Field(description="claude_routine (Claude Code 루틴 트리거) 또는 responder (허브가 내 API 키로 대신 답함)")
+    mode: str = Field(description="scheduled (Cowork 예약 작업 등 내 AI가 주기적으로 확인, Claude 기억으로 답함), "
+                                  "claude_routine (Claude Code 루틴 트리거), responder (허브가 내 API 키로 대신 답함)")
     agent: str | None = Field(None, description="어느 AI로 답할지 (내 AI가 하나면 생략)")
     enabled: bool = True
+    schedule: str | None = Field(None, description="scheduled: hourly / daily / weekdays / manual (내 AI가 허브를 확인하는 주기)")
+    project: str | None = Field(None, description="scheduled: 답하는 Claude 프로젝트 이름 (표시용)")
     routine_url: str | None = Field(None, description="루틴 API 트리거 URL (…/routines/trig_…/fire)")
     routine_token: str | None = Field(None, description="루틴 API 트리거 토큰 (sk-ant-oat01-…). 바꿀 때만")
     provider: str | None = Field(None, description="responder: anthropic / openai / gemini")
