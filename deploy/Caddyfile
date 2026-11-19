@@ -1,0 +1,17 @@
+{$HUB_DOMAIN} {
+	encode gzip
+	# 요청 본문 상한 (텍스트/마크다운만 받으므로 작게)
+	request_body {
+		max_size 1MB
+	}
+	reverse_proxy hub:8000
+	log {
+		output stdout
+		# ?token= 이 로그에 남지 않도록 쿼리 제거
+		format filter {
+			request>uri query {
+				delete token
+			}
+		}
+	}
+}
