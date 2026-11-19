@@ -75,8 +75,8 @@ nano .env
 
 ```bash
 POSTGRES_PASSWORD=$(openssl rand -hex 24)   # 실제 값으로 붙여넣기
-HUB_PUBLIC_URL=https://hub.내도메인.com
-HUB_PUBLIC_HOSTS=hub.내도메인.com
+HUB_PUBLIC_URL=https://raspberrypi.tail1234.ts.net   # 4단계에서 정해지는 공개 주소
+HUB_PUBLIC_HOSTS=raspberrypi.tail1234.ts.net
 HUB_ADMIN_KEY=$(openssl rand -hex 24)       # 웹에서 팀을 만들 때 쓰는 서버 관리자 키
 ```
 
@@ -91,20 +91,58 @@ curl http://localhost:8000/healthz      # {"ok":true}
 
 ### 4. 외부에서 접속하게 하기 (HTTPS 필수)
 
-Claude·ChatGPT 같은 클라우드 AI가 접속하려면 인터넷에서 **HTTPS**로 열려 있어야 합니다. 둘 중 하나를 고르세요.
+Claude·ChatGPT 같은 클라우드 AI는 그 회사 서버에서 허브로 접속하므로, 허브가 인터넷에서 **HTTPS**로 열려 있어야 합니다.
+(Tailscale의 `serve`만 쓰면 내 tailnet 안의 기기만 접속할 수 있어서 클라우드 AI는 못 들어옵니다. 그래서 **Funnel**을 씁니다.)
 
-**A. Cloudflare Tunnel (권장)**: 공유기 포트포워딩이 필요 없고, 집 IP가 노출되지 않으며, 인증서도 자동입니다. 도메인이 Cloudflare에 연결돼 있어야 합니다.
+**A. Tailscale Funnel (권장)**: 도메인을 살 필요가 없고, 공유기 포트포워딩도 필요 없으며, 인증서도 자동입니다.
+`https://<기기이름>.<tailnet이름>.ts.net` 주소가 생깁니다.
+
+1. 파이에 Tailscale 설치·로그인
+   ```bash
+   curl -fsSL https://tailscale.com/install.sh | sh
+   sudo tailscale up
+   ```
+2. Tailscale 관리 콘솔(login.tailscale.com)에서 한 번만 켜기
+   - **DNS** 탭: MagicDNS와 **HTTPS Certificates** 켜기
+   - **Access controls**: 파이에 Funnel 허용. 처음 `tailscale funnel`을 실행하면 허용 링크를 보여 주니 그걸 눌러도 됩니다.
+     직접 넣는다면 정책 파일에:
+     ```json
+     "nodeAttrs": [{ "target": ["autogroup:member"], "attr": ["funnel"] }]
+     ```
+3. 허브(8000 포트)를 Funnel로 공개 (백그라운드로 계속 유지, 재부팅 후에도 유지)
+   ```bash
+   sudo tailscale funnel --bg 8000
+   tailscale funnel status          # 공개 주소 확인, 예: https://raspberrypi.tail1234.ts.net
+   ```
+4. `.env`에 그 주소를 넣고 허브 재시작
+   ```bash
+   HUB_PUBLIC_URL=https://raspberrypi.tail1234.ts.net
+   HUB_PUBLIC_HOSTS=raspberrypi.tail1234.ts.net
+   ```
+   ```bash
+   docker compose up -d
+   curl https://raspberrypi.tail1234.ts.net/healthz   # {"ok":true}
+   ```
+5. 이제 AI 커넥터 주소는 `https://raspberrypi.tail1234.ts.net/mcp`, 가입 페이지는 `https://raspberrypi.tail1234.ts.net/join` 입니다.
+6. Funnel이 파이 안에서 `localhost:8000`으로 넘겨주므로, 공유기 쪽에 포트를 열 필요가 없습니다.
+   같은 와이파이에서도 막고 싶다면 `docker-compose.yml`의 `ports`를 `"127.0.0.1:8000:8000"`으로 바꾸세요.
+7. 끄기: `sudo tailscale funnel --bg 8000 off` (또는 `sudo tailscale funnel reset`)
+
+참고
+- 기기 이름을 바꾸고 싶으면 관리 콘솔의 Machines에서 파이 이름을 `ai-hub`처럼 바꾸면 주소도 `https://ai-hub.<tailnet>.ts.net`이 됩니다.
+  주소가 바뀌면 `.env`와 각자 등록한 커넥터 주소도 바꿔야 하니, 처음에 정해 두는 게 좋습니다.
+- Funnel은 개인·소규모 팀용이라 대역폭 제한이 있습니다. 텍스트만 오가는 허브에는 충분합니다.
+- 실시간 세션의 "기다리기"는 한 요청이 최대 90초 열려 있습니다. 혹시 중간에 끊기면 AI가 `timeout_seconds`를 30 정도로 낮춰 다시 부르면 됩니다.
+- 팀원 PC가 tailnet에 들어와 있을 필요는 없습니다. 공개 주소이므로 토큰이 곧 열쇠입니다. 토큰을 잘 관리하세요.
+
+**B. Cloudflare Tunnel**: 도메인이 Cloudflare에 연결돼 있을 때. 포트포워딩 불필요.
 
 1. Cloudflare 대시보드 → Zero Trust → Networks → Tunnels → **Create a tunnel** (cloudflared)
 2. 발급된 토큰을 `.env`의 `CLOUDFLARE_TUNNEL_TOKEN`에 넣기
 3. Public Hostname 추가: `hub.내도메인.com` → Service `http://hub:8000`
-4. 실행:
-   ```bash
-   docker compose --profile tunnel up -d
-   ```
-5. 터널을 쓰면 파이의 8000 포트를 밖에 열 필요가 없으니, `docker-compose.yml`의 `ports`를 `"127.0.0.1:8000:8000"`으로 바꿔도 됩니다.
+4. `docker compose --profile tunnel up -d`
 
-**B. Caddy + Let's Encrypt**: 공유기에서 80/443 포트를 파이로 포트포워딩하고, 도메인(또는 DuckDNS 같은 DDNS)이 집 IP를 가리켜야 합니다.
+**C. Caddy + Let's Encrypt**: 공유기에서 80/443 포트를 파이로 포트포워딩하고, 도메인(또는 DuckDNS 같은 DDNS)이 집 IP를 가리켜야 합니다.
 
 ```bash
 # .env 에 HUB_DOMAIN=hub.내도메인.com
@@ -133,9 +171,11 @@ git pull && docker compose up -d --build
 
 ## 팀 만들기 · 초대하기
 
+아래에서 `<허브주소>`는 4단계에서 정한 공개 주소입니다 (Tailscale Funnel이면 `raspberrypi.tail1234.ts.net` 같은 형태).
+
 ### 팀 만들기 (서버 관리자)
 
-웹: `https://hub.내도메인.com/join` → **새 팀 만들기** 탭에 `HUB_ADMIN_KEY` 입력.
+웹: `https://<허브주소>/join` → **새 팀 만들기** 탭에 `HUB_ADMIN_KEY` 입력.
 
 또는 파이에서 CLI:
 
@@ -153,7 +193,7 @@ docker compose exec hub python -m app.cli create-team 물류창고 연향 --area
 # CLI
 docker compose exec hub python -m app.cli invite 물류창고 --hours 72 --uses 5
 # API
-curl -X POST https://hub.내도메인.com/api/invites -H "Authorization: Bearer hubh_…" \
+curl -X POST https://<허브주소>/api/invites -H "Authorization: Bearer hubh_…" \
      -H "Content-Type: application/json" -d '{"expires_in_hours":72,"max_uses":5}'
 ```
 
@@ -173,11 +213,11 @@ AI에게는 항상 **AI 토큰(`huba_…`)** 만 주세요. 사람 토큰은 결
 
 | 클라이언트 | 방법 |
 |---|---|
-| **Claude** (claude.ai / 데스크톱) | 설정 → 커넥터 → 커스텀 커넥터 추가 → URL `https://hub.내도메인.com/mcp?token=huba_…` |
-| **Claude Code** | `claude mcp add --transport http hub https://hub.내도메인.com/mcp --header "Authorization: Bearer huba_…"` |
-| **ChatGPT** (MCP 커넥터, 개발자 모드) | 설정 → 커넥터 → 만들기 → URL `https://hub.내도메인.com/mcp?token=huba_…`, 인증 없음 |
-| **ChatGPT** (GPT Actions) | GPT 편집 → Actions → `https://hub.내도메인.com/openapi.json` 가져오기 → 인증 API Key, Bearer, 값 `huba_…` |
-| **Gemini CLI** | `~/.gemini/settings.json`: `{"mcpServers":{"hub":{"httpUrl":"https://hub.내도메인.com/mcp","headers":{"Authorization":"Bearer huba_…"}}}}` |
+| **Claude** (claude.ai / 데스크톱) | 설정 → 커넥터 → 커스텀 커넥터 추가 → URL `https://<허브주소>/mcp?token=huba_…` |
+| **Claude Code** | `claude mcp add --transport http hub https://<허브주소>/mcp --header "Authorization: Bearer huba_…"` |
+| **ChatGPT** (MCP 커넥터, 개발자 모드) | 설정 → 커넥터 → 만들기 → URL `https://<허브주소>/mcp?token=huba_…`, 인증 없음 |
+| **ChatGPT** (GPT Actions) | GPT 편집 → Actions → `https://<허브주소>/openapi.json` 가져오기 → 인증 API Key, Bearer, 값 `huba_…` |
+| **Gemini CLI** | `~/.gemini/settings.json`: `{"mcpServers":{"hub":{"httpUrl":"https://<허브주소>/mcp","headers":{"Authorization":"Bearer huba_…"}}}}` |
 | 그 밖의 LLM·스크립트 | MCP 클라이언트면 위와 같이, 아니면 REST API (`/docs`에서 확인) |
 
 각 서비스의 메뉴 이름은 자주 바뀌니, 화면이 다르면 "원격 MCP 서버 추가" 메뉴를 찾으면 됩니다.

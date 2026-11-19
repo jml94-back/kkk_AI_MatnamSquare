@@ -1,6 +1,7 @@
 # 기본:   docker compose up -d                       → 내부망 http://<pi>:8000
 # 외부 공개 (택1):
-#   docker compose --profile tunnel up -d            → Cloudflare Tunnel (포트포워딩 불필요, 권장)
+#   Tailscale Funnel (권장): 파이 호스트에서  sudo tailscale funnel --bg 8000   (README 참고)
+#   docker compose --profile tunnel up -d            → Cloudflare Tunnel (포트포워딩 불필요)
 #   docker compose --profile caddy up -d             → Caddy + Let's Encrypt (80/443 포트포워딩 필요)
 services:
   db:
