@@ -6,6 +6,7 @@ Claude 커스텀 커넥터, ChatGPT 커넥터, Gemini CLI 등 MCP 클라이언�
 
 import asyncio
 import json
+import logging
 from typing import Any
 
 from mcp.server.fastmcp import Context, FastMCP
@@ -332,6 +333,24 @@ def read_note(ctx: Context, agent: str, key: str) -> str:
 
 
 # --------------------------------------------------------------------- ASGI 래퍼
+_log = logging.getLogger("hub.mcp")
+if not _log.handlers:
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    _log.addHandler(_h)
+    _log.setLevel(logging.INFO)
+    _log.propagate = False
+
+
+def _token_kind(req, token: str | None) -> str:
+    """토큰 값은 절대 남기지 않고, 어디서 왔는지와 종류(접두사)만 기록한다."""
+    if not token:
+        return "none"
+    src = "header" if req.headers.get("authorization") or req.headers.get("x-hub-token") else "query"
+    kind = token[:5] if token[:5] in ("huba_", "hubh_") else "other"
+    return f"{src}:{kind}:len{len(token)}"
+
+
 def build_mcp_asgi():
     """/mcp 요청에 대해 토큰을 먼저 검사하고(없으면 401), 통과하면 MCP 앱으로 넘긴다."""
     inner = mcp.streamable_http_app()
@@ -344,6 +363,12 @@ def build_mcp_asgi():
             token = extract_token(req.headers, req.query_params, get_settings().allow_query_token)
             with session_scope() as db:
                 p = resolve_token(db, token)
+            _log.info(
+                "mcp %s %s token=%s valid=%s host=%s origin=%s ua=%s",
+                scope.get("method"), scope["path"], _token_kind(req, token), p is not None,
+                req.headers.get("host", "-"), req.headers.get("origin", "-"),
+                req.headers.get("user-agent", "-")[:80],
+            )
             if p is None:
                 resp = JSONResponse({"error": "유효한 토큰이 필요합니다"}, status_code=401,
                                     headers={"WWW-Authenticate": "Bearer"})
@@ -357,6 +382,8 @@ def build_mcp_asgi():
         if scope["type"] == "lifespan":
             await inner(scope, receive, send)
             return
+        if scope["type"] == "http":
+            _log.info("404 %s %s", scope.get("method"), scope["path"])
         resp = JSONResponse({"detail": "Not Found"}, status_code=404)
         await resp(scope, receive, send)
 
