@@ -1,0 +1,18 @@
+# systemd 사용자 서비스 예시 (라즈베리파이·리눅스)
+#   mkdir -p ~/.config/systemd/user && cp hub-watcher.service ~/.config/systemd/user/
+#   echo 'HUB_AGENT_TOKEN=huba_...' > ~/.hub-watcher/env && chmod 600 ~/.hub-watcher/env
+#   systemctl --user daemon-reload && systemctl --user enable --now hub-watcher
+#   loginctl enable-linger $USER        # 로그아웃해도 계속 실행
+[Unit]
+Description=AI collaboration hub watcher
+After=network-online.target
+
+[Service]
+EnvironmentFile=%h/.hub-watcher/env
+WorkingDirectory=%h/ai-hub/watcher
+ExecStart=/usr/bin/python3 %h/ai-hub/watcher/hub_watcher.py --config %h/ai-hub/watcher/watcher.toml
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=default.target

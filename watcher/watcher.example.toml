@@ -1,0 +1,49 @@
+# 허브 감시기 설정 예시.  cp watcher.example.toml watcher.toml
+# AI 토큰은 파일에 쓰지 말고 환경변수로:  export HUB_AGENT_TOKEN=huba_...
+
+[hub]
+url = "https://ai-hub.tail1234.ts.net"   # 허브 공개 주소
+token_env = "HUB_AGENT_TOKEN"
+poll_seconds = 30                        # 몇 초마다 확인할지 (최소 10)
+
+[watcher]
+state_file = "~/.hub-watcher/state.json"
+log_file = "~/.hub-watcher/watcher.log"
+
+[runner]
+# --- Claude Code (기본) ---
+# {prompt}, {mcp_config}, {allowed_tools}, {hub_url} 이 실제 값으로 바뀝니다.
+# --allowedTools 에 있는 도구만 허용되고, 나머지(파일 수정·명령 실행 등)는 막힙니다.
+# --strict-mcp-config: 내 PC에 등록된 다른 MCP 서버는 쓰지 않고 허브만 연결
+command = ["claude", "-p", "{prompt}", "--strict-mcp-config", "--mcp-config", "{mcp_config}", "--allowedTools", "{allowed_tools}"]
+# AI가 참고할 프로젝트 폴더 (CLAUDE.md, 코드). 읽기만 허용하려면 allowed_tools 에 "Read", "Grep", "Glob" 추가
+workdir = "~/projects/warehouse"
+timeout_seconds = 600
+allowed_tools = [
+  "mcp__hub__whoami", "mcp__hub__read_inbox", "mcp__hub__read_thread", "mcp__hub__reply",
+  "mcp__hub__list_members", "mcp__hub__list_specs", "mcp__hub__get_spec",
+  "mcp__hub__search_notes", "mcp__hub__read_note",
+  # "Read", "Grep", "Glob",            # 프로젝트 파일 읽기 허용
+  # "mcp__hub__propose_decision",      # 결정 제안까지 허용
+]
+
+# --- Gemini CLI 예시 ---
+# ~/.gemini/settings.json 에 hub MCP 서버(헤더에 $HUB_AGENT_TOKEN)를 등록해 두고:
+# command = ["gemini", "-p", "{prompt}"]
+
+# --- 직접 만든 스크립트 ---
+# 환경변수 HUB_URL, HUB_AGENT_TOKEN, HUB_MCP_CONFIG 가 넘어갑니다.
+# command = ["python3", "my_agent.py", "{prompt}"]
+
+[wake]
+only_to_me = true                  # 나(내 팀원 이름)를 지목한 글만. false 면 팀 전체 글에도 깨어남
+kinds = ["question", "request"]    # notice(공지)로는 깨우지 않음
+wake_on_replies = true             # 내가 쓴 글에 답글이 달려도 깨움
+max_threads_per_run = 5
+
+[limits]
+max_runs_per_hour = 6              # 시간당 AI 실행 횟수
+cooldown_seconds = 60              # 실행 사이 최소 간격
+max_ai_chain = 4                   # 사람 글 없이 AI 글만 4개 이어지면 그 스레드는 더 깨우지 않음 (핑퐁 방지)
+max_attempts_per_item = 2          # 같은 글로 실행이 실패하면 2번까지만 재시도
+# quiet_hours = "23:00-08:00"      # 이 시간에는 깨우지 않음
