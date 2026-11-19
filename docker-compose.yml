@@ -33,6 +33,8 @@ services:
       HUB_PUBLIC_URL: ${HUB_PUBLIC_URL:-}
       HUB_TEAM_CREATION: ${HUB_TEAM_CREATION:-admin_key}
       HUB_ADMIN_KEY: ${HUB_ADMIN_KEY:-}
+      HUB_SECRET_KEY: ${HUB_SECRET_KEY:-}
+      HUB_WAKE_ENABLED: ${HUB_WAKE_ENABLED:-true}
       HUB_ALLOW_QUERY_TOKEN: ${HUB_ALLOW_QUERY_TOKEN:-true}
     ports:
       # 내부망에서만 쓰거나 터널/프록시를 쓸 때는 "127.0.0.1:8000:8000" 으로 바꿔도 됨

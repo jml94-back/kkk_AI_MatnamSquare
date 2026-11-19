@@ -98,6 +98,10 @@ class Message(Base):
     # 큰 파일은 업로드하지 않고 GitHub 등 외부 링크로만 참조한다
     links: Mapped[list] = mapped_column(JSON, default=list)
     status: Mapped[str] = mapped_column(String(16), default="open", index=True)  # open/answered/resolved
+    # 깨우기 연쇄 깊이 (사람·평소 AI = 0, 깨워진 AI가 쓴 글 = 깨운 글 + 1). AI끼리 끝없이 깨우는 것을 막는다
+    wake_depth: Mapped[int] = mapped_column(Integer, default=0)
+    # 자동으로 쓴 글이면 그 방식 (responder / routine). 사람이 직접 시킨 글이면 None
+    auto_via: Mapped[str | None] = mapped_column(String(16), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
 
@@ -245,3 +249,58 @@ class AgentNote(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
     agent: Mapped[Agent] = relationship(foreign_keys=[agent_id])
+
+
+class WakeConfig(Base):
+    """팀원별 'AI 깨우기' 설정. 그 팀원에게 메시지가 오면 허브가 그 사람의 AI를 깨운다.
+    - claude_routine: Claude Code 루틴의 API 트리거를 호출 → 클라우드 세션이 허브 커넥터로 답함
+    - responder: 허브가 팀원의 API 키로 LLM을 직접 불러 AI 메모를 근거로 답함 (벤더 무관)
+    비밀값(루틴 토큰·API 키)은 HUB_SECRET_KEY 로 암호화해 저장하고 응답에 절대 돌려주지 않는다."""
+
+    __tablename__ = "wake_config"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    team_id: Mapped[int] = mapped_column(ForeignKey("team.id"), index=True)
+    member_id: Mapped[int] = mapped_column(ForeignKey("member.id"), unique=True)
+    agent_id: Mapped[int] = mapped_column(ForeignKey("agent.id"), index=True)
+    mode: Mapped[str] = mapped_column(String(20))  # claude_routine / responder
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    on_direct: Mapped[bool] = mapped_column(Boolean, default=True)  # 나에게 온 새 글
+    on_replies: Mapped[bool] = mapped_column(Boolean, default=True)  # 내가 참여한 스레드의 새 답글
+    on_broadcast: Mapped[bool] = mapped_column(Boolean, default=False)  # 팀 전체 공지
+    routine_url: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    provider: Mapped[str | None] = mapped_column(String(16), nullable=True)  # anthropic / openai / gemini
+    model: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    instructions: Mapped[str] = mapped_column(Text, default="")
+    secret_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
+    max_per_hour: Mapped[int] = mapped_column(Integer, default=10)
+    # 루틴 세션이 깨어 있는 동안 그 AI가 쓴 글은 active_depth 를 물려받는다
+    active_depth: Mapped[int] = mapped_column(Integer, default=0)
+    active_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_fired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str] = mapped_column(Text, default="")
+    last_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+    member: Mapped[Member] = relationship()
+    agent: Mapped[Agent] = relationship()
+
+
+class WakeJob(Base):
+    """깨우기 작업 큐. 메시지를 쓰는 같은 트랜잭션에서 쌓이고, 백그라운드 워커가 처리한다."""
+
+    __tablename__ = "wake_job"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    team_id: Mapped[int] = mapped_column(ForeignKey("team.id"), index=True)
+    config_id: Mapped[int] = mapped_column(ForeignKey("wake_config.id", ondelete="CASCADE"), index=True)
+    message_id: Mapped[int] = mapped_column(ForeignKey("message.id", ondelete="CASCADE"))
+    root_id: Mapped[int] = mapped_column(Integer)
+    reason: Mapped[str] = mapped_column(String(16))  # direct / reply / broadcast / test
+    depth: Mapped[int] = mapped_column(Integer, default=0)
+    # pending → running → fired / skipped / failed / merged(다른 작업과 한 번에 처리됨)
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    result: Mapped[str] = mapped_column(Text, default="")
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    run_after: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)

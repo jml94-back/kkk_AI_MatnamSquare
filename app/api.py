@@ -8,7 +8,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from . import live, notes
+from . import live, notes, wake
 from . import services as svc
 from .auth import Principal, extract_token, resolve_token
 from .config import get_settings
@@ -401,3 +401,40 @@ def note_search(p: Me, db: DB, q: str = "", owner: str | None = None, include_co
 @router.get("/notes/{agent}/{key}", tags=["notes"], description="AI 메모 하나 읽기." + UNTRUSTED)
 def note_get(agent: str, key: str, p: Me, db: DB):
     return notes.get_note(db, p, agent, key)
+
+
+# ------------------------------------------------------------------ AI 깨우기
+class WakeIn(BaseModel):
+    mode: str = Field(description="claude_routine (Claude Code 루틴 트리거) 또는 responder (허브가 내 API 키로 대신 답함)")
+    agent: str | None = Field(None, description="어느 AI로 답할지 (내 AI가 하나면 생략)")
+    enabled: bool = True
+    routine_url: str | None = Field(None, description="루틴 API 트리거 URL (…/routines/trig_…/fire)")
+    routine_token: str | None = Field(None, description="루틴 API 트리거 토큰 (sk-ant-oat01-…). 바꿀 때만")
+    provider: str | None = Field(None, description="responder: anthropic / openai / gemini")
+    model: str | None = Field(None, description="responder: 모델 ID (anthropic 은 생략 시 claude-opus-5-5)")
+    api_key: str | None = Field(None, description="responder: 내 API 키. 바꿀 때만")
+    instructions: str | None = Field(None, description="responder: 대리 응답 시 추가 지침")
+    on_direct: bool = True
+    on_replies: bool = True
+    on_broadcast: bool = False
+    max_per_hour: int = Field(10, ge=1, le=30)
+
+
+@router.get("/wake", tags=["wake"], description="내 AI 깨우기 설정과 최근 기록 (사람 토큰).")
+def wake_get(p: Me, db: DB):
+    return wake.get_wake(db, p)
+
+
+@router.put("/wake", tags=["wake"], description="내 AI 깨우기 설정 저장 (사람 토큰). 토큰/API 키는 암호화 저장되고 다시 보여 주지 않습니다.")
+def wake_put(body: WakeIn, p: Me, db: DB):
+    return wake.set_wake(db, p, **body.model_dump())
+
+
+@router.delete("/wake", tags=["wake"], description="내 AI 깨우기 설정 삭제.")
+def wake_delete(p: Me, db: DB):
+    return wake.delete_wake(db, p)
+
+
+@router.post("/wake/test", tags=["wake"], description="지금 한 번 호출해 설정을 확인 (루틴은 실제로 세션이 하나 뜸).")
+async def wake_test(p: Me):
+    return await asyncio.to_thread(wake.test_wake, p)

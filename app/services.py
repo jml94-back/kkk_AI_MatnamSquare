@@ -243,6 +243,7 @@ def message_to_dict(db: Session, m: Message, viewer: Principal | None = None, wi
         "from_agent": m.sender_agent.name if m.sender_agent else None,
         "from_llm": m.sender_agent.llm if m.sender_agent else None,
         "written_by": "ai" if m.sender_agent_id else "human",
+        "auto": m.auto_via,
         "to": m.to_member.name if m.to_member else None,
         "spec_refs": [{"spec": v.spec.name, "version": v.version} for v in m.spec_refs],
         "created_at": _iso(m.created_at),
@@ -306,10 +307,14 @@ def create_message(
         links=_clean_links(links),
     )
     m.spec_refs = _resolve_spec_refs(db, p.team_id, spec_refs)
+    from . import wake
+
+    m.wake_depth = wake.depth_for_sender(db, p)
     db.add(m)
     db.flush()
     db.add(MessageRead(message_id=m.id, member_id=p.member_id))  # 내가 쓴 건 읽음 처리
     db.flush()
+    wake.enqueue_for_message(db, m)
     db.refresh(m)
     return message_to_dict(db, m, p)
 
@@ -397,7 +402,9 @@ def get_message(db: Session, p: Principal, message_id: int, mark_read=True) -> d
     return d
 
 
-def reply(db: Session, p: Principal, message_id: int, body: str, spec_refs=None, status: str | None = None, links=None) -> dict:
+def reply(db: Session, p: Principal, message_id: int, body: str, spec_refs=None, status: str | None = None, links=None,
+          *, auto_via: str | None = None, wake_depth: int | None = None) -> dict:
+    """답글. auto_via/wake_depth 는 허브 대리 응답기가 쓸 때만 (외부 API로는 받지 않음)."""
     parent = _team_message(db, p, message_id)
     if not parent:
         raise HubError(404, "메시지가 없습니다")
@@ -418,17 +425,23 @@ def reply(db: Session, p: Principal, message_id: int, body: str, spec_refs=None,
         tags=[],
         links=_clean_links(links),
         status="open",
+        auto_via=auto_via,
     )
     r.spec_refs = _resolve_spec_refs(db, p.team_id, spec_refs)
+    from . import wake
+
+    r.wake_depth = wake_depth if wake_depth is not None else wake.depth_for_sender(db, p)
     db.add(r)
     db.flush()
     db.add(MessageRead(message_id=r.id, member_id=p.member_id))
     if status:
         _set_status(parent, status)
-    elif parent.status == "open" and parent.sender_member_id != p.member_id:
+    elif parent.status == "open" and parent.sender_member_id != p.member_id and not auto_via:
+        # 자동 답글은 '답변됨'으로 바꾸지 않는다 (주인이 아직 확인하지 않았으므로)
         parent.status = "answered"
     parent.updated_at = datetime.now(UTC)
     db.flush()
+    wake.enqueue_for_message(db, r)
     db.refresh(r)
     return message_to_dict(db, r, p)
 

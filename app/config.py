@@ -21,6 +21,19 @@ class Settings(BaseSettings):
     admin_key: str = ""
     max_body_chars: int = 30_000
 
+    # ---- AI 깨우기 (wake) ----
+    # 루틴 토큰·API 키를 DB에 암호화해 저장할 때 쓰는 키 (openssl rand -hex 32). 비우면 깨우기 설정 저장 불가
+    secret_key: str = ""
+    # 깨우기 기능 전체 on/off
+    wake_enabled: bool = True
+    # 앱 안에서 백그라운드 워커를 돌릴지 (테스트에서는 끔)
+    wake_worker: bool = True
+    wake_poll_seconds: float = 3.0
+    # AI가 AI를 깨우는 연쇄의 최대 깊이. 사람/평소 AI가 쓴 글 = 0, 깨워진 AI가 쓴 글 = 1, ...
+    wake_max_chain: int = 3
+    # 한 스레드에 대리 응답기가 달 수 있는 최대 답글 수
+    wake_thread_auto_cap: int = 6
+
 
 @lru_cache
 def get_settings() -> Settings:
