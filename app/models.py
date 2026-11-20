@@ -262,7 +262,7 @@ class WakeConfig(Base):
     team_id: Mapped[int] = mapped_column(ForeignKey("team.id"), index=True)
     member_id: Mapped[int] = mapped_column(ForeignKey("member.id"), unique=True)
     agent_id: Mapped[int] = mapped_column(ForeignKey("agent.id"), index=True)
-    mode: Mapped[str] = mapped_column(String(20))  # claude_routine / responder / scheduled
+    mode: Mapped[str] = mapped_column(String(20))  # claude_routine / responder / scheduled / chatgpt_events
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     on_direct: Mapped[bool] = mapped_column(Boolean, default=True)  # 나에게 온 새 글
     on_replies: Mapped[bool] = mapped_column(Boolean, default=True)  # 내가 참여한 스레드의 새 답글
@@ -279,6 +279,8 @@ class WakeConfig(Base):
     last_fired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # 이 사람의 AI가 마지막으로 inbox 를 확인한 시각 (scheduled 방식이 실제로 도는지 확인용)
     last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # scheduled: 어느 앱의 예약 작업이 확인하나 (claude / chatgpt)
+    client: Mapped[str | None] = mapped_column(String(16), nullable=True)
     # scheduled: 답하는 Claude 프로젝트 이름 (표시용)
     project_label: Mapped[str | None] = mapped_column(String(100), nullable=True)
     last_error: Mapped[str] = mapped_column(Text, default="")
@@ -360,3 +362,31 @@ class AppointmentParticipant(Base):
 
     appointment: Mapped[Appointment] = relationship(back_populates="participants")
     member: Mapped[Member] = relationship()
+
+
+class EventSubscription(Base):
+    """ChatGPT 등 MCP 클라이언트의 이벤트 구독 (MCP Events, webhook 전달).
+
+    클라이언트가 events/subscribe 로 '이 AI 앞으로 새 글이 오면 이 URL로 알려 달라'고 등록한다.
+    구독 정체성 = (AI, 콜백 URL, 이벤트 이름, 인자) 이며 같은 정체성으로 다시 구독하면 갱신(만료 연장)된다.
+    서명 비밀값(whsec_…)은 HUB_SECRET_KEY 로 암호화해 저장한다."""
+
+    __tablename__ = "event_subscription"
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)  # sub_… (정체성에서 결정적으로 만든 값)
+    team_id: Mapped[int] = mapped_column(ForeignKey("team.id"), index=True)
+    member_id: Mapped[int] = mapped_column(ForeignKey("member.id"), index=True)
+    agent_id: Mapped[int] = mapped_column(ForeignKey("agent.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(60))
+    arguments: Mapped[dict] = mapped_column(JSON, default=dict)
+    url: Mapped[str] = mapped_column(String(1000))
+    secret_enc: Mapped[str] = mapped_column(Text)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    client_name: Mapped[str] = mapped_column(String(100), default="")
+    last_delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+    agent: Mapped[Agent] = relationship()

@@ -48,6 +48,8 @@ def create_all():
 _LATE_COLUMNS = {
     "message": {"wake_depth": "INTEGER NOT NULL DEFAULT 0", "auto_via": "VARCHAR(16)"},
     "wake_job": {"appointment_id": "INTEGER"},
+    "wake_config": {"client": "VARCHAR(16)", "last_checked_at": "TIMESTAMP WITH TIME ZONE",
+                    "project_label": "VARCHAR(100)"},
 }
 
 

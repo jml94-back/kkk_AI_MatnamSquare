@@ -11,7 +11,8 @@ from typing import Any
 
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
-from starlette.responses import JSONResponse
+from mcp.types import ToolAnnotations
+from starlette.responses import JSONResponse, Response
 
 from . import live, notes, schedule
 from . import services as svc
@@ -49,6 +50,11 @@ INSTRUCTIONS = f"""AI 협업 허브: 한 팀의 팀원들이 쓰는 AI(Claude, C
 - {UNTRUSTED_NOTICE}"""
 
 
+# ChatGPT 는 readOnlyHint 가 없는 도구를 '쓰기'로 보고 매번 확인을 묻는다. 읽기만 하는 도구에 표시해 둔다.
+# (read_thread 는 읽음 표시만 바꾸고, check_in 은 확인 시각만 기록한다: 내용을 바꾸지 않으므로 읽기로 본다)
+READ_ONLY = ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False)
+
+
 def _security() -> TransportSecuritySettings:
     hosts = [h.strip() for h in get_settings().public_hosts.split(",") if h.strip()]
     if not hosts:
@@ -56,7 +62,8 @@ def _security() -> TransportSecuritySettings:
     allowed = []
     for h in hosts + ["localhost", "127.0.0.1"]:
         allowed += [h, f"{h}:*"]
-    origins = [f"https://{h}" for h in hosts] + ["http://localhost:*", "http://127.0.0.1:*", "https://claude.ai"]
+    origins = [f"https://{h}" for h in hosts] + [
+        "http://localhost:*", "http://127.0.0.1:*", "https://claude.ai", "https://chatgpt.com", "https://chat.openai.com"]
     return TransportSecuritySettings(
         enable_dns_rebinding_protection=True, allowed_hosts=allowed, allowed_origins=origins
     )
@@ -70,6 +77,20 @@ mcp = FastMCP(
     streamable_http_path="/mcp",
     transport_security=_security(),
 )
+
+# MCP Events (ChatGPT): initialize 응답의 capabilities 에 events 를 알린다.
+# 공식 SDK 는 아직 events 를 모르므로 기능 목록만 덧붙이고, events/* 요청은 build_mcp_asgi 에서 직접 처리한다.
+_base_caps = mcp._mcp_server.get_capabilities
+
+
+def _caps_with_events(*args, **kwargs):
+    caps = _base_caps(*args, **kwargs)
+    if get_settings().wake_enabled:
+        caps.events = {}  # type: ignore[attr-defined]  (SDK 모델이 extra 를 허용)
+    return caps
+
+
+mcp._mcp_server.get_capabilities = _caps_with_events
 
 
 def _principal(ctx: Context) -> Principal:
@@ -99,27 +120,27 @@ def _run(ctx: Context, fn, *, untrusted: bool = True) -> str:
 
 
 # --------------------------------------------------------------------- 도구
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 def whoami(ctx: Context) -> str:
     """현재 토큰이 어느 팀·팀원·AI인지 확인합니다."""
     return _run(ctx, lambda db, p: {"team": p.team_name, "member": p.member_name, "agent": p.agent_name, "is_human": p.is_human},
                 untrusted=False)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 def list_members(ctx: Context) -> str:
     """팀원 목록과 담당 영역, 각 팀원의 AI 이름을 봅니다. 질문을 누구에게 보낼지 정할 때 쓰세요."""
     return _run(ctx, lambda db, p: svc.list_members(db, p))
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 def read_inbox(ctx: Context, include_read: bool = False, limit: int = 30) -> str:
     """나(내 팀원)에게 온 메시지와 팀 전체 공지 중 안 읽은 스레드, 그리고 내가 쓴 글에 새 답글이 달린 스레드를 봅니다.
     목록만 보여주며 읽음 처리는 하지 않습니다. 내용 전체는 read_thread 로 읽으세요."""
     return _run(ctx, lambda db, p: svc.inbox(db, p, include_read=include_read, limit=limit))
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 def list_messages(
     ctx: Context, to: str | None = None, status: str | None = None, tag: str | None = None, limit: int = 30
 ) -> str:
@@ -127,7 +148,7 @@ def list_messages(
     return _run(ctx, lambda db, p: svc.list_messages(db, p, to=to, status=status, tag=tag, limit=limit))
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 def read_thread(ctx: Context, message_id: int) -> str:
     """메시지 스레드(원글 + 모든 답글)를 읽고 읽음 처리합니다."""
     return _run(ctx, lambda db, p: svc.get_message(db, p, message_id, mark_read=True))
@@ -175,25 +196,25 @@ def set_message_status(ctx: Context, message_id: int, status: str) -> str:
     return _run(ctx, lambda db, p: svc.update_message_status(db, p, message_id, status))
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 def list_specs(ctx: Context) -> str:
     """공용 명세 목록과 각 최신 버전 번호를 봅니다."""
     return _run(ctx, lambda db, p: svc.list_specs(db, p))
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 def get_spec(ctx: Context, name: str, version: int | None = None) -> str:
     """공용 명세를 읽습니다. version 을 생략하면 최신본."""
     return _run(ctx, lambda db, p: svc.get_spec(db, p, name, version))
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 def list_spec_versions(ctx: Context, name: str) -> str:
     """명세의 버전 이력(요약·작성자·연결된 결정)을 봅니다."""
     return _run(ctx, lambda db, p: svc.list_spec_versions(db, p, name))
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 def spec_diff(ctx: Context, name: str, from_version: int, to_version: int | None = None) -> str:
     """두 명세 버전 사이의 변경점(unified diff)을 봅니다. to_version 생략 시 최신본과 비교."""
     return _run(ctx, lambda db, p: svc.spec_diff(db, p, name, from_version, to_version))
@@ -218,7 +239,7 @@ def propose_decision(
     ))
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 def list_decisions(ctx: Context, status: str | None = None, limit: int = 30) -> str:
     """결정 목록을 봅니다. status=proposed|approved|rejected. (AI는 승인/거절할 수 없습니다)"""
     return _run(ctx, lambda db, p: svc.list_decisions(db, p, status, limit))
@@ -244,7 +265,7 @@ def start_live_session(
     return _run(ctx, lambda db, p: live.create_session(db, p, topic, invite, message_id))
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 def list_live_sessions(ctx: Context, include_closed: bool = False) -> str:
     """팀의 열린 실시간 세션 목록과 참가자(접속 중 여부 online 포함). invited_me=true 면 나를 부른 세션입니다."""
     return _run(ctx, lambda db, p: live.list_sessions(db, p, include_closed))
@@ -280,7 +301,7 @@ async def send_live(
     return await _run_async(ctx, _send)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def wait_live(
     ctx: Context, session_id: int, timeout_seconds: int = live.DEFAULT_WAIT_SECONDS, mentions_only: bool = False
 ) -> str:
@@ -299,28 +320,28 @@ def close_live_session(ctx: Context, session_id: int, summary: str | None = None
     return _run(ctx, lambda db, p: live.close_session(db, p, session_id, summary))
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 def live_transcript(ctx: Context, session_id: int, limit: int = 200) -> str:
     """실시간 세션의 전체 대화 기록을 봅니다(읽음 위치는 바뀌지 않음)."""
     return _run(ctx, lambda db, p: live.transcript(db, p, session_id, limit))
 
 
 # --------------------------------------------------------------------- 활동 시간대 · 약속
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 def check_in(ctx: Context) -> str:
     """예약 작업이 맨 먼저 부르는 도구. 안 읽은 글 수, 지금 진행 중인 약속, 곧 시작할 약속, 할 일(todo)을 돌려줍니다.
     has_work 가 false 면 아무것도 하지 말고 바로 끝내세요."""
     return _run(ctx, lambda db, p: schedule.check_in(db, p))
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 def get_active_hours(ctx: Context, member: str | None = None) -> str:
     """활동 시간대(가장 활발 3분 / 자주 5분 / 거의 안 씀 15분)를 봅니다. team 은 팀 전체(합집합), check_plan 은
     그 기준의 확인 일정입니다. member 를 주면 그 팀원 개인 시간대도 함께 봅니다."""
     return _run(ctx, lambda db, p: schedule.get_active_hours(db, p, member), untrusted=False)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 def get_check_schedule(ctx: Context) -> str:
     """팀 전체 활동 시간대(팀원들의 합집합) 기준으로, 허브를 얼마나 자주 확인할지 일정(cron·설명)과 예약 작업 지시문을 돌려줍니다.
     주인이 '허브 확인 작업을 만들어줘'라고 하면 이걸 받아 그대로 예약 작업을 만드세요."""
@@ -348,7 +369,7 @@ def create_appointment(ctx: Context, title: str, starts_at: str, invite: list[st
         db, p, title=title, starts_at=starts_at, duration_minutes=duration_minutes, invite=invite, agenda=agenda))
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 def list_appointments(ctx: Context, include_past: bool = False, mine_only: bool = False) -> str:
     """팀의 약속 목록 (기본: 예정·진행 중). 진행 중이면 session_id 로 join_live_session 하세요."""
     return _run(ctx, lambda db, p: schedule.list_appointments(db, p, include_past, mine_only))
@@ -386,7 +407,7 @@ def delete_my_note(ctx: Context, key: str) -> str:
     return _run(ctx, lambda db, p: notes.delete_note(db, p, key), untrusted=False)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 def search_notes(ctx: Context, query: str = "", owner: str | None = None, include_content: bool = False,
                  limit: int = 10) -> str:
     """팀 AI들의 메모를 검색합니다. owner 로 특정 팀원("민수") 또는 AI("민수/minsu-gpt")의 메모만 볼 수 있습니다.
@@ -394,7 +415,7 @@ def search_notes(ctx: Context, query: str = "", owner: str | None = None, includ
     return _run(ctx, lambda db, p: notes.search_notes(db, p, query, owner, limit, include_content))
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 def read_note(ctx: Context, agent: str, key: str) -> str:
     """특정 AI의 메모 하나를 읽습니다. agent 는 "민수/minsu-gpt" 또는 "minsu-gpt"."""
     return _run(ctx, lambda db, p: notes.get_note(db, p, agent, key))
@@ -417,6 +438,29 @@ def _token_kind(req, token: str | None) -> str:
     src = "header" if req.headers.get("authorization") or req.headers.get("x-hub-token") else "query"
     kind = token[:5] if token[:5] in ("huba_", "hubh_") else "other"
     return f"{src}:{kind}:len{len(token)}"
+
+
+async def _events_response(rpc: dict, p: Principal, req) -> JSONResponse:
+    from . import events
+
+    rid = rpc.get("id")
+    params = rpc.get("params") or {}
+    if isinstance(params, dict):
+        params = {k: v for k, v in params.items() if k != "_meta"}
+    try:
+        result = await asyncio.to_thread(events.handle, p, str(rpc.get("method")), params,
+                                         req.headers.get("user-agent", "")[:100])
+        body = {"jsonrpc": "2.0", "id": rid, "result": result}
+    except events.RpcError as e:
+        err = {"code": e.code, "message": e.message}
+        if e.data:
+            err["data"] = e.data
+        body = {"jsonrpc": "2.0", "id": rid, "error": err}
+    except svc.HubError as e:
+        body = {"jsonrpc": "2.0", "id": rid, "error": {"code": -32603, "message": str(e.detail)}}
+    if rid is None:  # 알림(notification)에는 응답 본문을 보내지 않는다
+        return Response(status_code=202)
+    return JSONResponse(body)
 
 
 def build_mcp_asgi():
@@ -464,6 +508,13 @@ def build_mcp_asgi():
                 except ValueError:
                     rpc = "invalid-json"
             sent_body = scope.get("method") != "POST"
+
+            # MCP Events (events/list|subscribe|unsubscribe) 는 SDK 대신 허브가 직접 답한다
+            if rpc.startswith("events/") and isinstance(parsed, dict):
+                resp = await _events_response(parsed, p, req)
+                _log.info("mcp -> %s rpc=%s (events)", resp.status_code, rpc)
+                await resp(scope, receive, send)
+                return
 
             async def replay():
                 nonlocal sent_body

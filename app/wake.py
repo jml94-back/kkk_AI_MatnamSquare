@@ -35,7 +35,10 @@ from .services import HubError, _iso
 
 log = logging.getLogger("hub.wake")
 
-MODES = {"claude_routine", "responder", "scheduled"}
+MODES = {"claude_routine", "responder", "scheduled", "chatgpt_events"}
+# chatgpt_events: ChatGPT 가 MCP Events 로 허브 이벤트를 구독해 두면, 새 글이 올 때 허브가 webhook 으로 그 ChatGPT 채팅을 깨운다.
+# 답은 팀원 본인의 ChatGPT 채팅(그 채팅이 쓰는 ChatGPT 기억 포함)이 허브 도구로 쓴다. 비밀값 저장 없음.
+CLIENTS = {"claude", "chatgpt"}
 # scheduled: 팀원의 AI가 스스로 정해진 주기로 허브를 확인한다 (예: Claude Cowork 예약 작업 매시간).
 # 허브는 아무것도 호출하지 않고, 그 AI가 마지막으로 inbox 를 확인한 시각만 기록해 보여 준다.
 # Cowork 작업은 채팅(또는 그 프로젝트의) 메모리를 쓰므로, '진짜 내 Claude 기억'으로 답하게 하는 현재 유일한 Claude 경로다.
@@ -112,7 +115,12 @@ def config_to_dict(db: Session, c: WakeConfig, with_jobs: bool = True) -> dict:
     if c.mode == "claude_routine":
         d["routine_url"] = c.routine_url
     elif c.mode == "scheduled":
-        d.update(schedule=c.model or "hourly", project=c.project_label, last_checked_at=_iso(c.last_checked_at))
+        d.update(schedule=c.model or "hourly", project=c.project_label, client=c.client or "claude",
+                 last_checked_at=_iso(c.last_checked_at))
+    elif c.mode == "chatgpt_events":
+        from .events import subscriptions_summary
+
+        d.update(last_checked_at=_iso(c.last_checked_at), subscriptions=subscriptions_summary(db, c.agent_id))
     else:
         d.update(provider=c.provider, model=c.model, instructions=c.instructions)
     if with_jobs:
@@ -142,7 +150,7 @@ def get_wake(db: Session, p: Principal) -> dict:
 
 def set_wake(
     db: Session, p: Principal, *, mode: str, agent: str | None = None, enabled: bool = True,
-    schedule: str | None = None, project: str | None = None,
+    schedule: str | None = None, project: str | None = None, client: str | None = None,
     routine_url: str | None = None, routine_token: str | None = None,
     provider: str | None = None, model: str | None = None, api_key: str | None = None,
     instructions: str | None = None, on_direct: bool = True, on_replies: bool = True,
@@ -188,8 +196,17 @@ def set_wake(
             raise HubError(422, f"schedule 은 {sorted(SCHEDULE_LABELS)} 중 하나여야 합니다")
         # 비밀값이 필요 없는 방식이므로 예전 토큰/키는 지운다
         c.routine_url, c.provider, c.model, c.secret_enc = None, None, sch, None
+        cl = (client or c.client or "claude").lower()
+        if cl not in CLIENTS:
+            raise HubError(422, f"client 는 {sorted(CLIENTS)} 중 하나여야 합니다")
+        if cl == "chatgpt" and sch == "tiers":
+            raise HubError(422, "ChatGPT 예약 작업은 가장 짧아도 매시간입니다. hourly / daily / weekdays / manual 중에서 고르세요")
+        c.client = cl
         if project is not None:
             c.project_label = project.strip()[:100] or None
+    elif mode == "chatgpt_events":
+        # ChatGPT 가 events/subscribe 로 콜백 URL·서명 비밀값을 직접 등록하므로 여기서는 받을 것이 없다
+        c.routine_url, c.provider, c.model, c.secret_enc = None, None, None, None
     else:
         prov = (provider or c.provider or "").lower()
         if prov not in PROVIDERS:
@@ -240,9 +257,13 @@ def public_summary(c: WakeConfig | None) -> dict | None:
     if not c or not c.enabled:
         return None
     if c.mode == "scheduled":
-        return {"mode": "scheduled", "agent": c.agent.name, "schedule": c.model or "hourly",
+        app = "ChatGPT" if c.client == "chatgpt" else "Claude"
+        return {"mode": "scheduled", "agent": c.agent.name, "schedule": c.model or "hourly", "client": c.client or "claude",
                 "project": c.project_label, "last_checked_at": _iso(c.last_checked_at),
-                "expect": f"{SCHEDULE_LABELS.get(c.model or 'hourly', '')} 확인, 주인의 Claude 기억으로 답함"}
+                "expect": f"{SCHEDULE_LABELS.get(c.model or 'hourly', '')} 확인, 주인의 {app} 기억으로 답함"}
+    if c.mode == "chatgpt_events":
+        return {"mode": "chatgpt_events", "agent": c.agent.name, "last_checked_at": _iso(c.last_checked_at),
+                "expect": "몇 분 안 (ChatGPT 이벤트 작업, 주인의 ChatGPT 기억으로 답함)"}
     if c.mode == "claude_routine":
         return {"mode": "claude_routine", "agent": c.agent.name, "expect": "몇 분 안 (Claude 루틴)"}
     return {"mode": "responder", "agent": c.agent.name, "expect": "바로 (허브 대리 응답, AI 메모 근거)"}
@@ -501,6 +522,10 @@ def _process_one(jid: int, now: datetime) -> int:
         if mode == "scheduled":
             _finish(j, "skipped", "예약 확인 방식 (허브가 깨우지 않음)")
             return 1
+    if mode == "chatgpt_events":
+        from .events import run_job
+
+        return run_job(jid, now)
     return _run_routine(jid, now) if mode == "claude_routine" else _run_responder(jid, now)
 
 
@@ -658,7 +683,16 @@ def test_wake(p: Principal) -> dict:
         mode, url, secret_enc, provider, model = c.mode, c.routine_url, c.secret_enc, c.provider, c.model
         member = c.member.name
     if mode == "scheduled":
-        return {"ok": True, "note": "예약 확인 방식은 허브가 호출하지 않습니다. Cowork 예약 작업에서 '지금 실행'을 눌러 확인하세요."}
+        return {"ok": True, "note": "예약 확인 방식은 허브가 호출하지 않습니다. Cowork(또는 ChatGPT) 예약 작업에서 '지금 실행'을 눌러 확인하세요."}
+    if mode == "chatgpt_events":
+        from .events import send_test
+
+        out = send_test(p)
+        with session_scope() as db:
+            c = _my_config(db, p)
+            if c and not out["ok"]:
+                c.last_error, c.last_error_at = out["error"][:500], _now()
+        return out
     try:
         secret = _decrypt(secret_enc)
         if mode == "claude_routine":
