@@ -228,3 +228,16 @@ def test_mcp_tools_listed(env):
     names = {x.name for x in asyncio.run(mcp.list_tools())}
     assert {"check_in", "get_check_schedule", "set_active_hours", "get_active_hours", "create_appointment", "list_appointments",
             "respond_appointment", "cancel_appointment"} <= names
+
+
+def test_join_page_prompt_matches_task_prompt(env):
+    """가입 페이지의 AI 지시문과 get_check_schedule 의 task_prompt 는 같은 글이어야 한다."""
+    import html
+    import re
+
+    c, _ = env
+    page = c.get("/join").text
+    shown = html.unescape(re.search(r'<code id="w-prompt"[^>]*>(.*?)</code>', page, re.S).group(1))
+    assert shown == schedule.TASK_PROMPT
+    for word in ("check_in", "search_notes", "join_live_session", "read_inbox", "create_appointment", "save_my_note"):
+        assert word in shown
