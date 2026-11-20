@@ -299,7 +299,8 @@ class WakeJob(Base):
     config_id: Mapped[int] = mapped_column(ForeignKey("wake_config.id", ondelete="CASCADE"), index=True)
     message_id: Mapped[int] = mapped_column(ForeignKey("message.id", ondelete="CASCADE"))
     root_id: Mapped[int] = mapped_column(Integer)
-    reason: Mapped[str] = mapped_column(String(16))  # direct / reply / broadcast / test
+    reason: Mapped[str] = mapped_column(String(16))  # direct / reply / broadcast / appointment
+    appointment_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # reason=appointment 일 때
     depth: Mapped[int] = mapped_column(Integer, default=0)
     # pending → running → fired / skipped / failed / merged(다른 작업과 한 번에 처리됨)
     status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
@@ -308,3 +309,54 @@ class WakeJob(Base):
     run_after: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+
+
+class ActiveHours(Base):
+    """팀원이 AI를 주로 쓰는 시간대 (3단계). 이 시간대에 따라 AI가 허브를 얼마나 자주 확인할지,
+    허브가 얼마나 빨리 깨울지가 정해진다. busy/often 에 없는 시간은 모두 rare(거의 안 씀)."""
+
+    __tablename__ = "active_hours"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    team_id: Mapped[int] = mapped_column(ForeignKey("team.id"), index=True)
+    member_id: Mapped[int] = mapped_column(ForeignKey("member.id"), unique=True)
+    timezone: Mapped[str] = mapped_column(String(64), default="Asia/Seoul")
+    busy: Mapped[list] = mapped_column(JSON, default=list)  # 예: ["월-금 09-12", "월-금 14-18"]
+    often: Mapped[list] = mapped_column(JSON, default=list)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+    member: Mapped[Member] = relationship()
+
+
+class Appointment(Base):
+    """AI 약속. 정한 시각이 되면 허브가 실시간 세션을 열고 참가자들의 AI를 깨우며,
+    끝나는 시각에 세션을 닫는다."""
+
+    __tablename__ = "appointment"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    team_id: Mapped[int] = mapped_column(ForeignKey("team.id"), index=True)
+    title: Mapped[str] = mapped_column(String(200))
+    agenda: Mapped[str] = mapped_column(Text, default="")
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    # scheduled → live → done / cancelled / missed(서버가 꺼져 있어 시간이 지나 버림)
+    status: Mapped[str] = mapped_column(String(16), default="scheduled", index=True)
+    created_by_member_id: Mapped[int] = mapped_column(ForeignKey("member.id"))
+    created_by_agent_id: Mapped[int | None] = mapped_column(ForeignKey("agent.id"), nullable=True)
+    session_id: Mapped[int | None] = mapped_column(ForeignKey("live_session.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+    created_by: Mapped[Member] = relationship(foreign_keys=[created_by_member_id])
+    participants: Mapped[list["AppointmentParticipant"]] = relationship(
+        back_populates="appointment", cascade="all, delete-orphan", order_by="AppointmentParticipant.id")
+
+
+class AppointmentParticipant(Base):
+    __tablename__ = "appointment_participant"
+    __table_args__ = (UniqueConstraint("appointment_id", "member_id"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    appointment_id: Mapped[int] = mapped_column(ForeignKey("appointment.id", ondelete="CASCADE"), index=True)
+    member_id: Mapped[int] = mapped_column(ForeignKey("member.id"))
+    response: Mapped[str] = mapped_column(String(16), default="invited")  # invited / accepted / declined
+
+    appointment: Mapped[Appointment] = relationship(back_populates="participants")
+    member: Mapped[Member] = relationship()
