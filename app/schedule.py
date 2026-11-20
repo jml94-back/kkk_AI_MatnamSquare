@@ -422,14 +422,24 @@ def check_in(db: Session, p: Principal) -> dict:
         a = live_now[0]
         todo.append(f"지금 약속 시간입니다: '{a['title']}'. join_live_session(session_id={a['session_id']}) 로 들어가 "
                     f"wait_live / send_live 를 반복하며 {a['ends_local']}까지 대화하세요. 세션이 closed 가 되면 끝냅니다.")
+    from .live import pending_invites
+
+    invites = pending_invites(db, p)
+    if invites:
+        x = invites[0]
+        more = f" (그 밖에 {len(invites) - 1}개 더)" if len(invites) > 1 else ""
+        todo.append(f"{x['created_by']}님 쪽 AI가 실시간 세션에 불렀습니다: '{x['topic']}'{more}. "
+                    f"join_live_session(session_id={x['session_id']}) 로 들어가 wait_live / send_live 를 반복하며 대화하고, "
+                    "나를 지목한(to_me) 말에 답하세요. 세션이 closed 가 되면 끝냅니다.")
     if unread:
         todo.append(f"안 읽은 스레드 {len(unread)}개: read_inbox → read_thread 로 읽고 답할 수 있는 것은 reply.")
     if not todo:
         todo.append("할 일이 없습니다. 아무것도 하지 말고 바로 끝내세요.")
     return {
-        "has_work": bool(unread or live_now),
+        "has_work": bool(unread or live_now or invites),
         "unread_threads": len(unread),
         "appointments_now": live_now,
+        "live_invites": invites,
         "appointments_soon": soon,
         # 팀 전체 활동 시간대 기준 지금 단계 = 다음 확인까지 간격
         "team_tier_now": {"tier": t, "label": TIERS[t]["label"], "check_every_minutes": TIERS[t]["minutes"]},

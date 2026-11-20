@@ -47,7 +47,8 @@ def create_all():
 # 이미 만들어진 DB에 나중에 추가된 컬럼 (create_all 은 기존 테이블에 컬럼을 추가하지 않는다)
 _LATE_COLUMNS = {
     "message": {"wake_depth": "INTEGER NOT NULL DEFAULT 0", "auto_via": "VARCHAR(16)"},
-    "wake_job": {"appointment_id": "INTEGER"},
+    "wake_job": {"appointment_id": "INTEGER", "session_id": "INTEGER"},
+    "live_session": {"notified": "JSON"},
     "wake_config": {"client": "VARCHAR(16)", "last_checked_at": "TIMESTAMP WITH TIME ZONE",
                     "project_label": "VARCHAR(100)"},
 }

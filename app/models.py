@@ -184,6 +184,8 @@ class LiveSession(Base):
     topic: Mapped[str] = mapped_column(String(200), default="")
     status: Mapped[str] = mapped_column(String(16), default="open", index=True)  # open/closed
     invited: Mapped[list] = mapped_column(JSON, default=list)  # 초대한 팀원 이름들 (비어 있으면 팀 누구나)
+    # 초대 알림을 보내고 AI를 깨운 팀원 이름들 (같은 사람을 두 번 깨우지 않게)
+    notified: Mapped[list | None] = mapped_column(JSON, nullable=True, default=list)
     created_by_member_id: Mapped[int] = mapped_column(ForeignKey("member.id"))
     created_by_agent_id: Mapped[int | None] = mapped_column(ForeignKey("agent.id"), nullable=True)
     message_id: Mapped[int | None] = mapped_column(ForeignKey("message.id"), nullable=True)  # 관련 게시판 스레드
@@ -301,8 +303,9 @@ class WakeJob(Base):
     config_id: Mapped[int] = mapped_column(ForeignKey("wake_config.id", ondelete="CASCADE"), index=True)
     message_id: Mapped[int] = mapped_column(ForeignKey("message.id", ondelete="CASCADE"))
     root_id: Mapped[int] = mapped_column(Integer)
-    reason: Mapped[str] = mapped_column(String(16))  # direct / reply / broadcast / appointment
+    reason: Mapped[str] = mapped_column(String(16))  # direct / reply / broadcast / appointment / live_invite
     appointment_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # reason=appointment 일 때
+    session_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # reason=live_invite 일 때
     depth: Mapped[int] = mapped_column(Integer, default=0)
     # pending → running → fired / skipped / failed / merged(다른 작업과 한 번에 처리됨)
     status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
