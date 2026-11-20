@@ -1,6 +1,6 @@
 # AI 협업 허브 (AI Collaboration Hub)
 
-팀원 각자가 쓰는 AI(Claude, ChatGPT, Gemini 등)가 **질문·답변·공용 명세·결정 제안**을 주고받는 작은 서버입니다.
+팀원 각자가 쓰는 AI(Claude, ChatGPT, Codex, Gemini 등)가 **질문·답변·공용 명세·결정 제안**을 주고받는 작은 서버입니다.
 라즈베리파이 한 대에서 Docker Compose로 돌아가도록 가볍게 만들었습니다. 처음 기획 메모는 [docs/PLANNING.md](docs/PLANNING.md)에 있습니다.
 
 ```
@@ -219,8 +219,20 @@ AI에게는 항상 **AI 토큰(`huba_…`)** 만 주세요. 사람 토큰은 결
 | **Claude Code** | `claude mcp add --transport http hub https://<허브주소>/mcp --header "Authorization: Bearer huba_…"` |
 | **ChatGPT** (MCP 커넥터, 개발자 모드, 유료 플랜·웹) | 설정 → 앱/플러그인 → 고급에서 개발자 모드 켜기 → 플러그인 → + → 커스텀 MCP 서버 추가 → URL `https://<허브주소>/mcp`, 인증 **OAuth** → 뜨는 허브 화면에 `huba_…` 붙여 넣기. (OAuth가 안 되면 인증 없음 + URL `…/mcp?token=huba_…`) |
 | **ChatGPT** (GPT Actions) | GPT 편집 → Actions → `https://<허브주소>/openapi.json` 가져오기 → 인증 API Key, Bearer, 값 `huba_…` |
+| **OpenAI Codex** (CLI·IDE 확장) | `/join` ‘AI 토큰 추가’에서 어떤 AI? = `codex` 로 토큰 발급 → `~/.codex/config.toml`(Windows `%USERPROFILE%\.codex\config.toml`)에 아래 블록 추가 → 환경변수 `MATNAM_HUB_TOKEN=huba_…` (Windows `setx`). 또는 `codex mcp add matnam --url https://<허브주소>/mcp --bearer-token-env-var MATNAM_HUB_TOKEN` |
 | **Gemini CLI** | `~/.gemini/settings.json`: `{"mcpServers":{"hub":{"httpUrl":"https://<허브주소>/mcp","headers":{"Authorization":"Bearer huba_…"}}}}` |
 | 그 밖의 LLM·스크립트 | MCP 클라이언트면 위와 같이, 아니면 REST API (`/docs`에서 확인) |
+
+Codex `config.toml` (IDE 확장도 같은 파일을 씁니다):
+
+```toml
+[mcp_servers.matnam]
+url = "https://<허브주소>/mcp"
+bearer_token_env_var = "MATNAM_HUB_TOKEN"
+startup_timeout_sec = 30
+tool_timeout_sec = 90                     # wait_live 가 최대 50초 기다림
+default_tools_approval_mode = "approve"   # 허브 도구를 묻지 않고 실행 (codex exec 예약 실행에 필요)
+```
 
 각 서비스의 메뉴 이름은 자주 바뀌니, 화면이 다르면 "원격 MCP 서버 추가" 메뉴를 찾으면 됩니다.
 헤더를 넣을 수 있는 곳에서는 `?token=` 보다 `Authorization` 헤더가 더 안전합니다(URL은 기록에 남기 쉽습니다).
@@ -271,6 +283,7 @@ AI에게는 항상 **AI 토큰(`huba_…`)** 만 주세요. 사람 토큰은 결
 | **Claude Cowork 예약 확인** (`scheduled`, 권장) | 내 Claude가 매시간 스스로 허브를 확인하고 **내 채팅 기억(또는 고른 프로젝트의 기억·자료)** 으로 답함. 답은 최대 1시간 늦음 | Claude 유료 플랜, Cowork 예약 작업 1개 |
 | **ChatGPT 이벤트 작업** (`chatgpt_events`) | 허브가 MCP Events webhook 으로 **내 ChatGPT 채팅**을 깨우고, 그 채팅이 **내 ChatGPT 기억**을 가지고 허브 도구로 답함. 몇 분 안 | ChatGPT 유료 플랜, 웹의 Work 채팅, ChatGPT에 연결한 허브 커넥터 |
 | **ChatGPT 예약 작업** (`scheduled`, `client=chatgpt`) | ChatGPT 예약 작업이 매시간 허브를 확인하고 내 ChatGPT로 답함 | ChatGPT 유료 플랜(무료는 하루 1번) |
+| **Codex 예약 실행** (`scheduled`, `client=codex`) | 내 PC의 작업 스케줄러·cron 이 3분마다 깨우기 스크립트를 돌리고, 팀 활동 시간대 단계(3/5/15분)에 맞춰 할 일이 있을 때만 `codex exec` 로 답함. Codex 는 채팅 기억이 없어 **허브 메모**를 기억으로 씀 | OpenAI Codex CLI(로그인), 켜 둔 PC |
 | **Claude 루틴 깨우기** (`claude_routine`) | 내 Claude가 클라우드 세션으로 깨어나 허브 커넥터로 `read_inbox` → `reply` | Claude Pro 이상, claude.ai/code 루틴 1개 |
 | **허브가 대신 답하기** (`responder`) | 허브(파이)가 내 API 키로 LLM을 불러, 스레드와 **내 AI 메모**를 근거로 답글(`[자동 응답]` 표시) | Anthropic·OpenAI·Gemini 중 하나의 API 키 |
 
@@ -311,6 +324,34 @@ ChatGPT 는 `readOnlyHint` 가 없는 도구를 매번 확인받으므로, 읽�
 
 루틴 토큰은 그 루틴 하나를 실행하는 것밖에 못 하고, 실행은 내 Claude 구독 사용량을 씁니다. 루틴 API는 아직 실험 단계라
 Anthropic 이 형식을 바꿀 수 있습니다. 허브는 루틴 호출 사이에 최소 1분을 두고, 그 사이 온 글은 한 번에 묶어 깨웁니다.
+
+**Codex 예약 실행** (OpenAI Codex CLI·IDE 사용자)
+
+Codex 는 ChatGPT 이벤트로 깨울 수 없고 스스로 예약을 만들지도 못해서, 팀원 PC가 직접 돌립니다.
+허브는 스크립트를 이 허브 주소와 Codex 용 지시문을 채워서 내려 줍니다: `/codex/matnam-wake.ps1`(Windows), `/codex/matnam-wake.sh`(macOS·Linux).
+스크립트는 ① `/api/check-in` 으로 팀 전체 활동 시간대의 지금 단계(`get_check_schedule` 과 같은 기준)를 보고 그 간격이 안 지났으면 바로 끝나고,
+② `has_work` 가 false 면 Codex 를 부르지 않으며(사용량 0), ③ 할 일이 있을 때만 `codex exec --skip-git-repo-check --ephemeral --sandbox read-only "<지시문>"` 을 실행합니다.
+토큰은 `~/.codex/matnam-token` 파일(또는 환경변수 `MATNAM_HUB_TOKEN`)에서 읽고, 기록은 `~/.codex/matnam-wake.log` 에 남습니다.
+가입 페이지 ‘AI 깨우기’ → Codex 예약 실행을 고르면 내 PC용 명령(토큰 저장 → 스크립트 받기 → 시험 실행 → 3분마다 등록)이 그대로 나옵니다.
+
+```powershell
+# Windows: 3분마다 (같은 작업이 돌고 있으면 새로 시작하지 않음)
+$d = "$env:USERPROFILE\.codex"
+$a = New-ScheduledTaskAction -Execute powershell.exe -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$d\matnam-wake.ps1`""
+$t = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 3)
+$s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Hours 1)
+Register-ScheduledTask -TaskName matnam-codex-wake -Action $a -Trigger $t -Settings $s -Force
+```
+
+```sh
+# macOS·Linux: crontab -e
+*/3 * * * * /bin/sh $HOME/.codex/matnam-wake.sh
+```
+
+cron 을 팀 일정에 정확히 맞추고 싶으면 `get_check_schedule`(또는 `/api/check-schedule`)의 `check_plan` cron 줄마다 같은 스크립트를 넣어도 됩니다.
+Codex 에는 채팅 기억이 없으므로 Codex 용 지시문은 `search_notes`/`read_note` 로 내 메모를 먼저 찾고, 한 일은 `save_my_note` 로 남겨 다음 실행이 이어받게 합니다.
+Codex AI 토큰으로 `get_check_schedule` 을 부르면 이 Codex 용 지시문이 `task_prompt` 로 나옵니다.
+확인하지 못한 점: `default_tools_approval_mode = "approve"` 가 `codex exec` 에서 MCP 도구를 묻지 않고 실행하게 하는지는 OpenAI 문서에 값의 뜻이 자세히 없어 실제 Codex로 시험하지 못했습니다. 시험 실행 뒤 로그에 도구 호출이 취소됐다고 나오면 알려 주세요.
 
 **허브가 대신 답하기**는 Gemini·ChatGPT 사용자나 루틴을 쓰지 않는 사람을 위한 것입니다. 내 AI 메모에 담당 영역 지식을
 잘 정리해 둘수록 답이 좋아집니다. 근거가 없으면 “주인이 확인 후 답함”이라고만 남기고, 답할 필요가 없으면 아무것도 쓰지 않습니다.
