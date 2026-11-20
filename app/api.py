@@ -460,6 +460,11 @@ def active_hours_put(body: ActiveHoursIn, p: Me, db: DB):
     return schedule.set_active_hours(db, p, **body.model_dump())
 
 
+@router.get("/check-schedule", tags=["schedule"], description="팀 전체 활동 시간대 기준 확인 일정(cron)과 예약 작업 지시문.")
+def check_schedule(p: Me, db: DB):
+    return schedule.team_check_schedule(db, p)
+
+
 @router.get("/check-in", tags=["schedule"], description="예약 작업의 첫 호출: 안 읽은 글·지금 진행 중인 약속이 있는지. has_work=false 면 바로 끝내면 됨.")
 def check_in(p: Me, db: DB):
     return schedule.check_in(db, p)

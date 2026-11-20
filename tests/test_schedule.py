@@ -90,6 +90,25 @@ def test_active_hours_api(env):
     assert members["bob"]["active_now"]["tier"] in schedule.TIERS and members["alice"]["active_now"] is None
 
 
+def test_team_union(env):
+    """A가 3~6시, B가 4~9시면 팀 전체는 3~9시. 시간대가 달라도 UTC 로 맞춰 합친다."""
+    c, t = env
+    c.put("/api/active-hours", headers=H(t["alice"]), json={"busy": ["매일 03-06"]})
+    r = c.put("/api/active-hours", headers=H(t["bob"]), json={"busy": ["매일 04-09"], "often": ["매일 20-22"]}).json()
+    assert r["team"]["busy"] == ["매일 3시~9시"] and r["team"]["often"] == ["매일 20시~22시"]
+    assert "*/3 3-8 * * *" in {x["cron"] for x in r["check_plan"]}
+    # 개인 시간대는 그대로
+    assert c.get("/api/active-hours", headers=H(t["alice"])).json()["busy"] == ["매일 03-06"]
+    # bob 이 도쿄(+9, 서울과 같음)가 아니라 UTC 면 서울 기준 13~18시로 들어간다
+    c.put("/api/active-hours", headers=H(t["bob"]), json={"busy": ["매일 04-09"], "timezone": "UTC"})
+    team = c.get("/api/active-hours", headers=H(t["alice"])).json()["team"]
+    assert team["busy"] == ["매일 3시~6시, 13시~18시"]
+    # AI가 바로 예약 작업을 만들 수 있는 형태
+    sch = c.get("/api/check-schedule", headers=H(t["alice-ai"])).json()
+    assert sch["check_plan"] == team["check_plan"] and "check_in" in sch["task_prompt"]
+    assert "save_my_note" in sch["task_prompt"] and "cron:" in sch["how_to"]
+
+
 def test_wake_delay_follows_tier(env, fired, monkeypatch):
     c, t = env
     c.put("/api/wake", headers=H(t["bob"]), json={"mode": "claude_routine", "routine_url": ROUTINE,
@@ -207,5 +226,5 @@ def test_mcp_tools_listed(env):
     import asyncio
 
     names = {x.name for x in asyncio.run(mcp.list_tools())}
-    assert {"check_in", "set_active_hours", "get_active_hours", "create_appointment", "list_appointments",
+    assert {"check_in", "get_check_schedule", "set_active_hours", "get_active_hours", "create_appointment", "list_appointments",
             "respond_appointment", "cancel_appointment"} <= names
