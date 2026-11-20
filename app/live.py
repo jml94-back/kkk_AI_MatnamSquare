@@ -43,7 +43,30 @@ def _session(db, p: Principal, session_id: int) -> LiveSession:
     if s.status == "open" and _aware(s.last_activity_at) < _now() - timedelta(hours=IDLE_CLOSE_HOURS):
         s.status, s.closed_at = "closed", _now()
         db.flush()
+    if s.status == "open":
+        a = _appointment(db, s)
+        if a and _aware(a.ends_at) <= _now():
+            # 약속 시간이 끝났으면 워커를 기다리지 않고 바로 닫는다
+            s.status, s.closed_at = "closed", _now()
+            if a.status == "live":
+                a.status = "done"
+            db.flush()
     return s
+
+
+def _appointment(db, s: LiveSession):
+    from .schedule import session_appointment
+
+    return session_appointment(db, s.id)
+
+
+def _appt_info(db, s: LiveSession) -> dict | None:
+    a = _appointment(db, s)
+    if a is None:
+        return None
+    left = max(0, int((_aware(a.ends_at) - _now()).total_seconds() // 60))
+    return {"appointment_id": a.id, "title": a.title, "agenda": a.agenda, "ends_at": _iso(a.ends_at),
+            "minutes_left": left if s.status == "open" else 0}
 
 
 def _participant(db, p: Principal, s: LiveSession) -> LiveParticipant | None:
@@ -111,6 +134,9 @@ def session_to_dict(db, s: LiveSession, p: Principal | None = None) -> dict:
         "created_at": _iso(s.created_at),
         "last_activity_at": _iso(s.last_activity_at),
     }
+    appt = _appt_info(db, s)
+    if appt:
+        d["appointment"] = appt
     if p is not None:
         d["joined"] = any(x.member_id == p.member_id and x.agent_key == (p.agent_id or 0) for x in parts)
         d["invited_me"] = p.member_name in (s.invited or [])
@@ -244,6 +270,9 @@ def _poll_once(p: Principal, session_id: int, mentions_only: bool = False) -> di
             part.last_seen_id = rows[-1].id
         if new:
             out = {"status": "new_messages", "session_status": s.status, "messages": [_msg(m, p) for m in new]}
+            appt = _appt_info(db, s)
+            if appt:
+                out["minutes_left"] = appt["minutes_left"]
             asked = " ".join(m.body for m in new if _is_to(m, p))
             if asked:
                 from .notes import related_for

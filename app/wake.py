@@ -39,7 +39,7 @@ MODES = {"claude_routine", "responder", "scheduled"}
 # scheduled: 팀원의 AI가 스스로 정해진 주기로 허브를 확인한다 (예: Claude Cowork 예약 작업 매시간).
 # 허브는 아무것도 호출하지 않고, 그 AI가 마지막으로 inbox 를 확인한 시각만 기록해 보여 준다.
 # Cowork 작업은 채팅(또는 그 프로젝트의) 메모리를 쓰므로, '진짜 내 Claude 기억'으로 답하게 하는 현재 유일한 Claude 경로다.
-SCHEDULE_LABELS = {"hourly": "매시간", "daily": "매일", "weekdays": "평일", "manual": "수동"}
+SCHEDULE_LABELS = {"tiers": "활동 시간대별(3/5/15분)", "hourly": "매시간", "daily": "매일", "weekdays": "평일", "manual": "수동"}
 PROVIDERS = {"anthropic", "openai", "gemini"}
 DEFAULT_MODELS = {"anthropic": "claude-opus-5-5"}
 # 서버 쪽 거절 대체(fallbacks)를 받는 Claude 모델
@@ -284,13 +284,17 @@ def enqueue_for_message(db: Session, m: Message) -> int:
         return 0
     cfgs = db.scalars(select(WakeConfig).where(WakeConfig.member_id.in_(targets), WakeConfig.enabled.is_(True),
                                                WakeConfig.mode != "scheduled")).all()
+    from .schedule import wake_delay
+
     n = 0
     for c in cfgs:
         reason = targets[c.member_id]
         if not {"direct": c.on_direct, "reply": c.on_replies, "broadcast": c.on_broadcast}[reason]:
             continue
+        # 활동 시간대를 정했으면 단계에 맞춰 모았다가 깨운다 (가장 활발: 바로, 자주: 5분, 거의 안 씀: 15분)
+        delay = wake_delay(db, c.member_id) or DEBOUNCE
         db.add(WakeJob(team_id=m.team_id, config_id=c.id, message_id=m.id, root_id=root.id, reason=reason,
-                       depth=m.wake_depth or 0, run_after=_now() + DEBOUNCE))
+                       depth=m.wake_depth or 0, run_after=_now() + delay))
         n += 1
     db.flush()
     return n
@@ -510,7 +514,9 @@ def _run_routine(jid: int, now: datetime) -> int:
             return 0
         batch = db.scalars(select(WakeJob).where(WakeJob.config_id == c.id, WakeJob.status == "pending")
                            .order_by(WakeJob.id)).all()
-        if _fired_last_hour(db, c) >= c.max_per_hour:
+        appt_ids = [b.appointment_id for b in batch if b.reason == "appointment" and b.appointment_id]
+        # 약속 시간 깨우기는 시간당 한도와 상관없이 보낸다
+        if not appt_ids and _fired_last_hour(db, c) >= c.max_per_hour:
             for b in batch:
                 _finish(b, "skipped", f"시간당 한도({c.max_per_hour}회) 초과")
             return len(batch)
@@ -526,7 +532,17 @@ def _run_routine(jid: int, now: datetime) -> int:
         j.run_after = now  # stale 판정 기준
         for b in batch:
             b.run_after = now
-        text = routine_text(c.member.name, items)
+        others = [it for it in items if it["reason"] != "appointment"]
+        if appt_ids:
+            from .models import Appointment
+            from .schedule import _tz_of, routine_appointment_text
+
+            appts = [a for a in (db.get(Appointment, i) for i in dict.fromkeys(appt_ids)) if a and a.status == "live"]
+            text = routine_appointment_text(c.member.name, appts, _tz_of(db, c.member_id))
+            if others:
+                text += "\n\n약속이 끝난 뒤에는 아래 글도 확인하세요.\n" + routine_text(c.member.name, others)
+        else:
+            text = routine_text(c.member.name, items)
         url, secret_enc, cid = c.routine_url, c.secret_enc, c.id
         depth = max(b.depth for b in batch) + 1
         batch_ids = [b.id for b in batch]
@@ -570,6 +586,9 @@ def _run_responder(jid: int, now: datetime) -> int:
         root = db.get(Message, j.root_id)
         if not root:
             _finish(j, "skipped", "스레드가 없습니다")
+            return 1
+        if j.reason == "appointment":
+            _finish(j, "skipped", "대리 응답은 실시간 약속 세션에 참여하지 않습니다")
             return 1
         # 같은 스레드에 더 새 작업이 있으면 그쪽에서 한 번만 답한다
         newer = db.scalar(select(WakeJob.id).where(WakeJob.config_id == c.id, WakeJob.root_id == j.root_id,

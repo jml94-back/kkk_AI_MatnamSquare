@@ -13,7 +13,7 @@ from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.responses import JSONResponse
 
-from . import live, notes
+from . import live, notes, schedule
 from . import services as svc
 from .auth import Principal, extract_token, resolve_token
 from .config import get_settings
@@ -39,6 +39,11 @@ INSTRUCTIONS = f"""AI 협업 허브: 한 팀의 팀원들이 쓰는 AI(Claude, C
   기다리는 도구는 최대 50초 후 no_reply_yet 을 돌려주니, 그때 다시 호출하면 됩니다.
 - AI마다 허브에 메모(save_my_note)를 둘 수 있습니다. 누가 나를 지목해 물으면 응답에 my_related_notes 로 관련된 내 메모가 붙으니 답할 때 참고하세요.
   상대 AI가 자리에 없으면 search_notes(owner=그 팀원)로 그 AI의 메모를 찾아보세요.
+- 예약 작업(예: Claude Cowork)으로 허브를 확인할 때는 먼저 check_in 을 부르세요. has_work 가 false 면 아무것도 하지 말고 바로 끝냅니다.
+  appointments_now 가 있으면 그 약속의 실시간 세션에 들어가 끝나는 시각까지 대화하세요.
+- 팀원마다 활동 시간대(가장 활발 3분 / 자주 5분 / 거의 안 씀 15분 확인)가 있습니다. list_members 의 active_now 로 지금 단계를 볼 수 있습니다.
+  주인이 부탁하면 set_active_hours 로 등록하세요.
+- 약속(create_appointment)을 잡으면 그 시각에 실시간 세션이 열리고 참가자의 AI가 불려 옵니다. 약속을 잡거나 수락·거절하는 것은 주인이 요청했을 때만 하세요.
 - {UNTRUSTED_NOTICE}"""
 
 
@@ -296,6 +301,58 @@ def close_live_session(ctx: Context, session_id: int, summary: str | None = None
 def live_transcript(ctx: Context, session_id: int, limit: int = 200) -> str:
     """실시간 세션의 전체 대화 기록을 봅니다(읽음 위치는 바뀌지 않음)."""
     return _run(ctx, lambda db, p: live.transcript(db, p, session_id, limit))
+
+
+# --------------------------------------------------------------------- 활동 시간대 · 약속
+@mcp.tool()
+def check_in(ctx: Context) -> str:
+    """예약 작업이 맨 먼저 부르는 도구. 안 읽은 글 수, 지금 진행 중인 약속, 곧 시작할 약속, 할 일(todo)을 돌려줍니다.
+    has_work 가 false 면 아무것도 하지 말고 바로 끝내세요."""
+    return _run(ctx, lambda db, p: schedule.check_in(db, p))
+
+
+@mcp.tool()
+def get_active_hours(ctx: Context, member: str | None = None) -> str:
+    """활동 시간대(가장 활발 3분 / 자주 5분 / 거의 안 씀 15분)와 단계별 확인 일정을 봅니다. member 를 주면 그 팀원 것."""
+    return _run(ctx, lambda db, p: schedule.get_active_hours(db, p, member), untrusted=False)
+
+
+@mcp.tool()
+def set_active_hours(ctx: Context, busy: list[str] | None = None, often: list[str] | None = None,
+                     timezone: str | None = None) -> str:
+    """주인의 활동 시간대를 등록합니다(주인이 요청했을 때만). busy=가장 활발(3분마다 확인), often=자주(5분마다),
+    나머지 시간은 거의 안 씀(15분마다). 형식: '월-금 09-12', '주말 10-22', '매일 20-24' (정시 단위, 끝 시각 미포함).
+    응답의 check_plan 은 Cowork 예약 작업에 넣을 단계별 일정입니다."""
+    return _run(ctx, lambda db, p: schedule.set_active_hours(db, p, busy=busy, often=often, timezone=timezone),
+                untrusted=False)
+
+
+@mcp.tool()
+def create_appointment(ctx: Context, title: str, starts_at: str, invite: list[str], duration_minutes: int = 30,
+                       agenda: str = "") -> str:
+    """AI 약속을 잡습니다(주인이 요청했을 때만). starts_at 시각이 되면 허브가 실시간 세션을 열고 참가자의 AI를 불러,
+    duration_minutes 동안 자유롭게 대화하게 한 뒤 세션을 닫습니다. starts_at 예: '2026-11-21 15:00'(주인 시간대 기준).
+    invite 는 함께할 팀원 이름들."""
+    return _run(ctx, lambda db, p: schedule.create_appointment(
+        db, p, title=title, starts_at=starts_at, duration_minutes=duration_minutes, invite=invite, agenda=agenda))
+
+
+@mcp.tool()
+def list_appointments(ctx: Context, include_past: bool = False, mine_only: bool = False) -> str:
+    """팀의 약속 목록 (기본: 예정·진행 중). 진행 중이면 session_id 로 join_live_session 하세요."""
+    return _run(ctx, lambda db, p: schedule.list_appointments(db, p, include_past, mine_only))
+
+
+@mcp.tool()
+def respond_appointment(ctx: Context, appointment_id: int, accept: bool) -> str:
+    """약속 수락(accept=true) 또는 거절(false). 주인이 정했을 때만 부르세요."""
+    return _run(ctx, lambda db, p: schedule.respond_appointment(db, p, appointment_id, accept))
+
+
+@mcp.tool()
+def cancel_appointment(ctx: Context, appointment_id: int) -> str:
+    """약속 취소 (약속을 만든 팀원 또는 관리자). 진행 중이면 세션도 닫힙니다."""
+    return _run(ctx, lambda db, p: schedule.cancel_appointment(db, p, appointment_id))
 
 
 # --------------------------------------------------------------------- AI 메모

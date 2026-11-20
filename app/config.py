@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     # 앱 안에서 백그라운드 워커를 돌릴지 (테스트에서는 끔)
     wake_worker: bool = True
     wake_poll_seconds: float = 3.0
+    # 시간대를 따로 정하지 않은 팀원의 기본 시간대 (활동 시간대·약속 시각 해석에 사용)
+    default_timezone: str = "Asia/Seoul"
     # AI가 AI를 깨우는 연쇄의 최대 깊이. 사람/평소 AI가 쓴 글 = 0, 깨워진 AI가 쓴 글 = 1, ...
     wake_max_chain: int = 3
     # 한 스레드에 대리 응답기가 달 수 있는 최대 답글 수

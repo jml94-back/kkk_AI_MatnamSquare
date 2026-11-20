@@ -12,7 +12,7 @@ from . import services as svc
 from .api import public, router
 from .config import get_settings
 from .db import create_all
-from . import wake
+from . import schedule, wake
 from .mcp_server import build_mcp_asgi, mcp
 from .oauth import router as oauth_router
 
@@ -20,11 +20,16 @@ log = logging.getLogger("hub")
 
 
 async def _wake_worker():
-    """깨우기 작업 큐를 몇 초마다 처리 (워커 1개 기준)."""
+    """약속 시작·종료와 깨우기 작업 큐를 몇 초마다 처리 (워커 1개 기준)."""
     st = get_settings()
     while True:
         try:
-            await asyncio.to_thread(wake.process_due)
+            await asyncio.to_thread(schedule.process_appointments)
+        except Exception:
+            log.exception("appointment worker 오류")
+        try:
+            if st.wake_enabled:
+                await asyncio.to_thread(wake.process_due)
         except Exception:
             log.exception("wake worker 오류")
         await asyncio.sleep(st.wake_poll_seconds)
@@ -35,7 +40,7 @@ async def lifespan(app: FastAPI):
     create_all()
     task = None
     st = get_settings()
-    if st.wake_enabled and st.wake_worker:
+    if st.wake_worker:
         task = asyncio.create_task(_wake_worker())
     try:
         async with mcp.session_manager.run():

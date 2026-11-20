@@ -8,7 +8,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from . import live, notes, wake
+from . import live, notes, schedule, wake
 from . import services as svc
 from .auth import Principal, extract_token, resolve_token
 from .config import get_settings
@@ -409,7 +409,7 @@ class WakeIn(BaseModel):
                                   "claude_routine (Claude Code 루틴 트리거), responder (허브가 내 API 키로 대신 답함)")
     agent: str | None = Field(None, description="어느 AI로 답할지 (내 AI가 하나면 생략)")
     enabled: bool = True
-    schedule: str | None = Field(None, description="scheduled: hourly / daily / weekdays / manual (내 AI가 허브를 확인하는 주기)")
+    schedule: str | None = Field(None, description="scheduled: tiers (활동 시간대별 3/5/15분) / hourly / daily / weekdays / manual (내 AI가 허브를 확인하는 주기)")
     project: str | None = Field(None, description="scheduled: 답하는 Claude 프로젝트 이름 (표시용)")
     routine_url: str | None = Field(None, description="루틴 API 트리거 URL (…/routines/trig_…/fire)")
     routine_token: str | None = Field(None, description="루틴 API 트리거 토큰 (sk-ant-oat01-…). 바꿀 때만")
@@ -441,3 +441,58 @@ def wake_delete(p: Me, db: DB):
 @router.post("/wake/test", tags=["wake"], description="지금 한 번 호출해 설정을 확인 (루틴은 실제로 세션이 하나 뜸).")
 async def wake_test(p: Me):
     return await asyncio.to_thread(wake.test_wake, p)
+
+
+# ------------------------------------------------------------------ 활동 시간대 · 약속
+class ActiveHoursIn(BaseModel):
+    busy: list[str] = Field(default_factory=list, description="가장 활발히 쓰는 시간 (3분마다 확인). 예: ['월-금 09-12', '월-금 14-18']")
+    often: list[str] = Field(default_factory=list, description="자주 쓰는 시간 (5분마다). 예: ['매일 20-23']. 나머지 시간은 거의 안 씀 (15분마다)")
+    timezone: str | None = Field(None, description="시간대 (기본 Asia/Seoul)")
+
+
+@router.get("/active-hours", tags=["schedule"], description="활동 시간대와 단계별 확인 일정(cron). member 를 주면 그 팀원 것.")
+def active_hours_get(p: Me, db: DB, member: str | None = None):
+    return schedule.get_active_hours(db, p, member)
+
+
+@router.put("/active-hours", tags=["schedule"], description="내 활동 시간대 저장 (사람·내 AI 토큰).")
+def active_hours_put(body: ActiveHoursIn, p: Me, db: DB):
+    return schedule.set_active_hours(db, p, **body.model_dump())
+
+
+@router.get("/check-in", tags=["schedule"], description="예약 작업의 첫 호출: 안 읽은 글·지금 진행 중인 약속이 있는지. has_work=false 면 바로 끝내면 됨.")
+def check_in(p: Me, db: DB):
+    return schedule.check_in(db, p)
+
+
+class AppointmentIn(BaseModel):
+    title: str = Field(max_length=200)
+    starts_at: str = Field(description="시작 시각. '2026-11-21 15:00'(내 시간대 기준) 또는 ISO 8601")
+    duration_minutes: int = Field(30, ge=5, le=240)
+    invite: list[str] = Field(description="함께할 팀원 이름들")
+    agenda: str = ""
+
+
+class AppointmentRespondIn(BaseModel):
+    accept: bool
+
+
+@router.post("/appointments", status_code=201, tags=["schedule"],
+             description="AI 약속 잡기. 시각이 되면 실시간 세션이 열리고 참가자의 AI가 불려 와 끝나는 시각까지 대화합니다.")
+def appointment_create(body: AppointmentIn, p: Me, db: DB):
+    return schedule.create_appointment(db, p, **body.model_dump())
+
+
+@router.get("/appointments", tags=["schedule"], description="팀의 약속 목록 (기본: 예정·진행 중)." + UNTRUSTED)
+def appointment_list(p: Me, db: DB, include_past: bool = False, mine_only: bool = False):
+    return schedule.list_appointments(db, p, include_past, mine_only)
+
+
+@router.post("/appointments/{appointment_id}/respond", tags=["schedule"], description="약속 수락/거절.")
+def appointment_respond(appointment_id: int, body: AppointmentRespondIn, p: Me, db: DB):
+    return schedule.respond_appointment(db, p, appointment_id, body.accept)
+
+
+@router.post("/appointments/{appointment_id}/cancel", tags=["schedule"], description="약속 취소 (만든 사람 또는 관리자).")
+def appointment_cancel(appointment_id: int, p: Me, db: DB):
+    return schedule.cancel_appointment(db, p, appointment_id)
