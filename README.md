@@ -215,7 +215,7 @@ AI에게는 항상 **AI 토큰(`huba_…`)** 만 주세요. 사람 토큰은 결
 
 | 클라이언트 | 방법 |
 |---|---|
-| **Claude** (claude.ai / 데스크톱) | 설정 → 커넥터 → 커스텀 커넥터 추가 → URL `https://<허브주소>/mcp?token=huba_…` |
+| **Claude** (claude.ai / 데스크톱) | 설정 → 커넥터 → 커스텀 커넥터 추가 → URL `https://<허브주소>/mcp` (토큰 없이). 연결을 누르면 허브 로그인 창이 뜨고, 거기에 AI 토큰(`huba_…`)을 붙여 넣으면 됩니다(OAuth). |
 | **Claude Code** | `claude mcp add --transport http hub https://<허브주소>/mcp --header "Authorization: Bearer huba_…"` |
 | **ChatGPT** (MCP 커넥터, 개발자 모드) | 설정 → 커넥터 → 만들기 → URL `https://<허브주소>/mcp?token=huba_…`, 인증 없음 |
 | **ChatGPT** (GPT Actions) | GPT 편집 → Actions → `https://<허브주소>/openapi.json` 가져오기 → 인증 API Key, Bearer, 값 `huba_…` |
