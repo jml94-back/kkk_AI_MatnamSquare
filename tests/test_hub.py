@@ -251,6 +251,22 @@ def test_live_session_rest(env):
     assert c.get("/api/live", headers=H(t["alice"])).json() == []
 
 
+def test_live_wait_is_capped_below_client_timeout(env, monkeypatch):
+    """Claude 등은 MCP 도구 호출을 60초에서 끊으므로 롱폴링 상한은 그보다 짧아야 하고, 큰 값은 거절 대신 잘린다."""
+    from app import live
+    assert live.MAX_WAIT_SECONDS < 60
+    c, t = env
+    sid = c.post("/api/live", headers=H(t["alice-ai"]), json={"topic": "상한", "invite": ["bob"]}).json()["session_id"]
+    monkeypatch.setattr(live, "MAX_WAIT_SECONDS", 0)
+    started = time.monotonic()
+    r = c.get(f"/api/live/{sid}/wait", headers=H(t["alice-ai"]), params={"timeout_seconds": 90})
+    assert r.status_code == 200 and r.json()["status"] == "no_reply_yet"
+    r = c.post(f"/api/live/{sid}/messages", headers=H(t["alice-ai"]),
+               json={"body": "hi", "wait_for_reply": True, "timeout_seconds": 90})
+    assert r.status_code == 201
+    assert time.monotonic() - started < 10
+
+
 def test_live_session_mcp(env):
     c, t = env
 

@@ -35,7 +35,7 @@ INSTRUCTIONS = f"""AI 협업 허브: 한 팀의 팀원들이 쓰는 AI(Claude, C
   send_live(보내고 답 기다리기) / wait_live(답 기다리기)를 반복 → 끝나면 close_live_session(summary 포함).
   여러 AI가 함께 있는 방에서는 질문할 상대를 to 로 지목하고, 나를 지목한(to_me) 메시지에 답하세요.
   모두가 동시에 말하지 않도록, 지목받지 않았다면 꼭 필요할 때만 끼어드세요.
-  기다리는 도구는 최대 90초 후 no_reply_yet 을 돌려주니, 그때 다시 호출하면 됩니다.
+  기다리는 도구는 최대 50초 후 no_reply_yet 을 돌려주니, 그때 다시 호출하면 됩니다.
 - AI마다 허브에 메모(save_my_note)를 둘 수 있습니다. 누가 나를 지목해 물으면 응답에 my_related_notes 로 관련된 내 메모가 붙으니 답할 때 참고하세요.
   상대 AI가 자리에 없으면 search_notes(owner=그 팀원)로 그 AI의 메모를 찾아보세요.
 - {UNTRUSTED_NOTICE}"""
@@ -253,7 +253,7 @@ async def send_live(
     ctx: Context, session_id: int, body: str, to: list[str] | None = None, wait_for_reply: bool = True,
     timeout_seconds: int = live.DEFAULT_WAIT_SECONDS, mentions_only: bool = False, links: list[str] | None = None,
 ) -> str:
-    """실시간 세션에 메시지를 보내고, 기본으로 다른 참가자의 새 메시지를 최대 timeout_seconds(최대 90초) 기다립니다.
+    """실시간 세션에 메시지를 보내고, 기본으로 다른 참가자의 새 메시지를 최대 timeout_seconds(최대 50초) 기다립니다.
     - to: 특정 참가자를 지목(예: ["민수"] 또는 ["민수/minsu-gpt"]). 비우면 방 전체. 지목해도 모두가 봅니다.
       여러 명이 있는 방에서는 질문할 상대를 지목해야 엉뚱한 AI들이 한꺼번에 답하지 않습니다.
     - mentions_only: true 면 나를 지목했거나 사람이 직접 쓴 메시지가 올 때만 깨어납니다(그 사이 대화도 함께 받음).
@@ -276,7 +276,7 @@ async def send_live(
 async def wait_live(
     ctx: Context, session_id: int, timeout_seconds: int = live.DEFAULT_WAIT_SECONDS, mentions_only: bool = False
 ) -> str:
-    """다른 참가자의 새 메시지를 최대 timeout_seconds(최대 90초) 기다립니다.
+    """다른 참가자의 새 메시지를 최대 timeout_seconds(최대 50초) 기다립니다.
     mentions_only=true 면 나를 지목(to_me)했거나 사람이 쓴 메시지가 올 때만 깨어납니다. 참가자가 많을 때 권장.
     - new_messages: 새 메시지 도착. to_me=true 인 것에는 답하고, 나머지는 필요할 때만 끼어드세요.
     - no_reply_yet: 아직 없음. 다시 호출하면 됩니다.
