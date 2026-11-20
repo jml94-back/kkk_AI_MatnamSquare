@@ -5,7 +5,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.openapi.utils import get_openapi
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.routing import APIRoute
 
 from . import services as svc
@@ -100,6 +100,27 @@ _DASHBOARD_HEADERS = {
 @app.get("/dashboard", include_in_schema=False, response_class=HTMLResponse)
 def dashboard_page():
     return HTMLResponse(_DASHBOARD_HTML, headers=_DASHBOARD_HEADERS)
+
+
+_CODEX_DIR = Path(__file__).parent / "static" / "codex"
+_CODEX_SCRIPTS = {"matnam-wake.sh": "text/x-shellscript; charset=utf-8", "matnam-wake.ps1": "text/plain; charset=utf-8"}
+
+
+@app.get("/codex/{name}", include_in_schema=False)
+def codex_script(name: str, request: Request):
+    """Codex 깨우기 스크립트. 이 허브 주소와 Codex 용 AI 지시문을 채워서 내려 준다."""
+    if name not in _CODEX_SCRIPTS:
+        return JSONResponse({"detail": "없는 파일"}, status_code=404)
+    hub = get_settings().public_url.rstrip("/") or str(request.base_url).rstrip("/")
+    text = (_CODEX_DIR / name).read_text(encoding="utf-8")
+    text = text.replace("__HUB_URL__", hub).replace("__PROMPT__", schedule.CODEX_TASK_PROMPT)
+    if name.endswith(".ps1"):
+        # Windows PowerShell 5.1 은 BOM 이 없으면 한글을 깨뜨린다. 줄바꿈도 CRLF 로.
+        body = "\ufeff" + text.replace("\r\n", "\n").replace("\n", "\r\n")
+    else:
+        body = text
+    return Response(body.encode("utf-8"), media_type=_CODEX_SCRIPTS[name],
+                    headers={"Content-Disposition": f'attachment; filename="{name}"', "Cache-Control": "no-store"})
 
 
 app.include_router(oauth_router)

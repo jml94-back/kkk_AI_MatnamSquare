@@ -103,7 +103,7 @@ class TeamIn(BaseModel):
     your_name: str
     area: str = ""
     agent_name: str | None = Field(None, description="같이 발급할 AI 이름 (예: yeon-claude)")
-    agent_llm: str = Field("other", description="claude / chatgpt / gemini / 기타")
+    agent_llm: str = Field("other", description="claude / chatgpt / codex / gemini / 기타")
 
 
 class JoinIn(BaseModel):
@@ -122,7 +122,7 @@ class InviteIn(BaseModel):
 
 class AgentIn(BaseModel):
     name: str
-    llm: str = Field("other", description="claude / chatgpt / gemini / 기타")
+    llm: str = Field("other", description="claude / chatgpt / codex / gemini / 기타")
 
 
 class AreaIn(BaseModel):
@@ -411,7 +411,7 @@ class WakeIn(BaseModel):
     enabled: bool = True
     schedule: str | None = Field(None, description="scheduled: tiers (활동 시간대별 3/5/15분) / hourly / daily / weekdays / manual (내 AI가 허브를 확인하는 주기)")
     project: str | None = Field(None, description="scheduled: 답하는 Claude 프로젝트 이름 (표시용)")
-    client: str | None = Field(None, description="scheduled: 예약 작업을 돌리는 앱 claude / chatgpt")
+    client: str | None = Field(None, description="scheduled: 예약 작업을 돌리는 앱 claude / chatgpt / codex (codex 는 PC 작업 스케줄러·cron 이 codex exec 실행)")
     routine_url: str | None = Field(None, description="루틴 API 트리거 URL (…/routines/trig_…/fire)")
     routine_token: str | None = Field(None, description="루틴 API 트리거 토큰 (sk-ant-oat01-…). 바꿀 때만")
     provider: str | None = Field(None, description="responder: anthropic / openai / gemini")
