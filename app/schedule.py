@@ -317,6 +317,21 @@ def hours_to_dict(db: Session, team_id: int, ah: ActiveHours | None, member_name
     return out
 
 
+def week_grid(db: Session, p: Principal) -> dict:
+    """대시보드용 주간 시간표: 팀 합집합과 팀원별 7×24 단계표를 보는 사람의 시간대로 맞춰 돌려준다."""
+    tz = _tz_of(db, p.member_id)
+    rows = []
+    for m in db.scalars(select(Member).where(Member.team_id == p.team_id, Member.active.is_(True)).order_by(Member.id)):
+        ah = _ah(db, m.id)
+        grid = week_to_local(_utc_week(ah), tz) if ah else [["rare"] * 24 for _ in range(7)]
+        rows.append({"member": m.name, "configured": ah is not None, "timezone": ah.timezone if ah else None,
+                     "busy": (ah.busy or []) if ah else [], "often": (ah.often or []) if ah else [], "grid": grid})
+    now = _now().astimezone(_zone(tz))
+    return {"timezone": tz, "tiers": TIERS, "now": {"weekday": now.weekday(), "hour": now.hour},
+            "team": team_hours(db, p.team_id, tz) | {"grid": week_to_local(team_week(db, p.team_id), tz)},
+            "members": rows}
+
+
 def get_active_hours(db: Session, p: Principal, member: str | None = None) -> dict:
     m = _member_by_name(db, p.team_id, member) if member else db.get(Member, p.member_id)
     return hours_to_dict(db, p.team_id, _ah(db, m.id), m.name)

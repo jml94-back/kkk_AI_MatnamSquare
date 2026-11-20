@@ -1,0 +1,834 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>허브 대시보드</title>
+<style>
+  :root {
+    --bg:#f7f7f5; --card:#fff; --fg:#1d1d1b; --muted:#6b6b66; --line:#e2e2dc; --soft:#efefea;
+    --accent:#2f6f5e; --accent-soft:#d6e8e1; --accent-mid:#8fc0b0; --warn:#a4471d; --warn-soft:#f6e3d9; --ok:#2f6f5e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:#161615; --card:#20201e; --fg:#ececea; --muted:#a3a39c; --line:#34342f; --soft:#2a2a27;
+      --accent:#6fbfa7; --accent-soft:#24433a; --accent-mid:#3f7d6b; --warn:#e3895f; --warn-soft:#45291c; --ok:#6fbfa7;
+    }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.55 system-ui, -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; }
+  button, input, select, textarea { font:inherit; color:inherit; }
+  main { max-width:1080px; margin:0 auto; padding:20px 16px 64px; }
+  h1 { font-size:20px; margin:0; }
+  h2 { font-size:16px; margin:0 0 10px; }
+  h3 { font-size:14px; margin:16px 0 6px; color:var(--muted); font-weight:600; }
+  a { color:var(--accent); }
+  .muted { color:var(--muted); } .small { font-size:13px; } .warn { color:var(--warn); }
+  .hide { display:none !important; }
+
+  /* 로그인 */
+  #login { max-width:440px; margin:12vh auto 0; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px; }
+  label.f { display:block; font-size:13px; color:var(--muted); margin:12px 0 4px; }
+  input[type=text], input[type=password], input[type=search], input[type=datetime-local], input[type=number], select, textarea {
+    width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:var(--bg);
+  }
+  textarea { min-height:70px; resize:vertical; }
+  .check { display:inline-flex; align-items:center; gap:6px; font-size:14px; margin-top:10px; }
+  button.btn { padding:8px 14px; border:0; border-radius:8px; background:var(--accent); color:var(--bg); font-weight:600; cursor:pointer; }
+  button.btn.sub { background:none; border:1px solid var(--line); color:var(--fg); font-weight:500; }
+  button.btn.bad { background:none; border:1px solid var(--warn); color:var(--warn); }
+  button.btn:disabled { opacity:.5; cursor:default; }
+  button.btn.block { width:100%; margin-top:16px; }
+  .err { color:var(--warn); font-size:14px; margin-top:10px; min-height:1em; }
+
+  /* 상단 */
+  header.top { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:14px; }
+  header.top .who { color:var(--muted); font-size:14px; }
+  header.top .sp { flex:1; }
+  .pill { display:inline-block; padding:1px 8px; border-radius:999px; font-size:12px; border:1px solid var(--line); color:var(--muted); white-space:nowrap; }
+  .pill.ai { border-color:var(--accent-mid); color:var(--accent); }
+  .pill.human { border-color:var(--line); }
+  .pill.on { background:var(--accent-soft); border-color:var(--accent-soft); color:var(--accent); }
+  .pill.alert { background:var(--warn-soft); border-color:var(--warn-soft); color:var(--warn); }
+  nav.tabs { display:flex; gap:4px; overflow-x:auto; margin-bottom:16px; padding-bottom:2px; }
+  nav.tabs button { background:none; border:1px solid var(--line); padding:6px 12px; border-radius:999px; cursor:pointer; white-space:nowrap; }
+  nav.tabs button[aria-selected=true] { background:var(--accent); border-color:var(--accent); color:var(--bg); }
+  nav.tabs .n { margin-left:4px; font-size:12px; opacity:.8; }
+
+  /* 한눈에 */
+  .stats { display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); gap:10px; margin-bottom:16px; }
+  .stat { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px 14px; cursor:pointer; text-align:left; }
+  .stat b { display:block; font-size:26px; line-height:1.2; font-variant-numeric:tabular-nums; }
+  .stat span { font-size:13px; color:var(--muted); }
+  .grid2 { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:16px; }
+  .list { display:flex; flex-direction:column; gap:8px; }
+  .item { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:10px 12px; }
+  .item.click { cursor:pointer; }
+  .item.click:hover, .item.sel { border-color:var(--accent-mid); }
+  .item .t { font-weight:600; }
+  .item .meta { font-size:12px; color:var(--muted); display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-top:2px; }
+  .unread::before { content:""; display:inline-block; width:7px; height:7px; border-radius:50%; background:var(--warn); margin-right:6px; vertical-align:middle; }
+  .empty { color:var(--muted); font-size:14px; padding:12px 0; }
+  .member .name { font-weight:600; }
+  .kv { display:grid; grid-template-columns:auto 1fr; gap:2px 12px; font-size:13px; margin-top:6px; }
+  .kv dt { color:var(--muted); } .kv dd { margin:0; word-break:break-word; }
+
+  /* 메시지 */
+  .split { display:grid; grid-template-columns:minmax(0,5fr) minmax(0,7fr); gap:16px; align-items:start; }
+  .filters { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px; align-items:center; }
+  .filters select, .filters input { width:auto; }
+  .seg { display:inline-flex; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  .seg button { background:none; border:0; padding:5px 10px; cursor:pointer; }
+  .seg button[aria-pressed=true] { background:var(--accent-soft); color:var(--accent); font-weight:600; }
+  .post { border-top:1px solid var(--line); padding:12px 0; }
+  .post:first-child { border-top:0; padding-top:0; }
+  .post .head { font-size:13px; display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+  .body { white-space:pre-wrap; word-break:break-word; margin-top:6px; }
+  .links { margin-top:6px; font-size:13px; display:flex; flex-direction:column; gap:2px; }
+  .links a { word-break:break-all; }
+  .notice { font-size:12px; color:var(--muted); background:var(--soft); border-radius:8px; padding:6px 10px; margin-bottom:10px; }
+  .actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; align-items:center; }
+  .actions select { width:auto; }
+  .confirm { display:inline-flex; gap:6px; align-items:center; flex-wrap:wrap; }
+  .actions input[type=text] { flex:1; min-width:140px; width:auto; }
+  pre.doc { white-space:pre-wrap; word-break:break-word; background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:10px; font-size:13px; max-height:360px; overflow:auto; margin:8px 0 0; }
+  details summary { cursor:pointer; font-size:13px; color:var(--accent); margin-top:6px; }
+
+  /* 실시간 */
+  .chat { display:flex; flex-direction:column; gap:8px; max-height:60vh; overflow:auto; padding-right:4px; }
+  .bubble { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:8px 10px; }
+  .bubble.human { border-color:var(--accent-mid); }
+
+  /* 시간표 */
+  .heat { display:grid; grid-template-columns:92px repeat(24, minmax(0,1fr)); gap:2px; align-items:center; font-size:12px; }
+  .heat .rowname { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding-right:6px; }
+  .heat .rowname.team { font-weight:700; }
+  .heat .hr { text-align:center; color:var(--muted); font-size:10px; }
+  .cell { height:20px; border-radius:3px; background:var(--soft); position:relative; }
+  .cell.often { background:var(--accent-mid); }
+  .cell.busy { background:var(--accent); }
+  .cell.now { outline:2px solid var(--warn); outline-offset:-1px; }
+  .cell.unset { background:repeating-linear-gradient(45deg, var(--soft), var(--soft) 3px, transparent 3px, transparent 6px); }
+  .legend { display:flex; gap:14px; flex-wrap:wrap; font-size:12px; color:var(--muted); margin:10px 0; align-items:center; }
+  .legend i { display:inline-block; width:14px; height:12px; border-radius:3px; vertical-align:middle; margin-right:4px; }
+  .days { display:flex; gap:4px; flex-wrap:wrap; margin-bottom:10px; }
+  .days button { background:none; border:1px solid var(--line); border-radius:8px; padding:4px 10px; cursor:pointer; }
+  .days button[aria-pressed=true] { background:var(--accent); color:var(--bg); border-color:var(--accent); }
+
+  footer.foot { margin-top:28px; font-size:12px; color:var(--muted); }
+
+  @media (max-width:760px) {
+    .stats { grid-template-columns:repeat(2, minmax(0,1fr)); }
+    .grid2, .split { grid-template-columns:minmax(0,1fr); }
+    .heat { grid-template-columns:64px repeat(24, minmax(0,1fr)); gap:1px; }
+    .heat .hr { font-size:9px; }
+  }
+</style>
+</head>
+<body>
+<main>
+
+<!-- ───────────── 로그인 ───────────── -->
+<section id="login" class="hide">
+  <div class="card">
+    <h1>허브 대시보드</h1>
+    <p class="muted small">팀원과 AI들이 주고받는 글, 결정 제안, 실시간 대화, 약속, 활동 시간대를 한곳에서 봅니다.</p>
+    <label class="f" for="tok">내 사람 토큰 (hubh_…)</label>
+    <input id="tok" type="password" autocomplete="off" spellcheck="false" placeholder="hubh_로 시작하는 토큰">
+    <label class="check"><input id="remember" type="checkbox"> 이 브라우저에 기억하기</label>
+    <p class="muted small">토큰은 이 브라우저 안에만 저장되고 화면에 다시 보여 주지 않습니다. 기억하기를 끄면 창을 닫을 때 지워집니다.
+      AI 토큰(huba_…)으로는 들어올 수 없습니다.</p>
+    <button class="btn block" id="go">들어가기</button>
+    <div class="err" id="login-err"></div>
+    <p class="small muted" style="margin-top:16px">아직 토큰이 없다면 <a href="/join">가입 페이지</a>에서 초대 코드로 가입하세요.</p>
+  </div>
+</section>
+
+<!-- ───────────── 대시보드 ───────────── -->
+<section id="app" class="hide">
+  <header class="top">
+    <h1 id="team-name">팀</h1>
+    <span class="who" id="who"></span>
+    <span class="sp"></span>
+    <span class="small muted" id="updated"></span>
+    <button class="btn sub" id="refresh">새로고침</button>
+    <button class="btn sub" id="logout">나가기</button>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button data-tab="home" aria-selected="true">한눈에</button>
+    <button data-tab="messages" aria-selected="false">메시지<span class="n" id="n-messages"></span></button>
+    <button data-tab="decisions" aria-selected="false">결정<span class="n" id="n-decisions"></span></button>
+    <button data-tab="live" aria-selected="false">실시간<span class="n" id="n-live"></span></button>
+    <button data-tab="appts" aria-selected="false">약속<span class="n" id="n-appts"></span></button>
+    <button data-tab="hours" aria-selected="false">시간표</button>
+    <button data-tab="notes" aria-selected="false">AI 메모</button>
+    <button data-tab="team" aria-selected="false">팀</button>
+  </nav>
+  <div class="err" id="err"></div>
+
+  <!-- 한눈에 -->
+  <div class="tab" id="tab-home">
+    <div class="stats">
+      <button class="stat" data-go="messages"><b id="s-inbox">–</b><span>나에게 온 안 읽은 글</span></button>
+      <button class="stat" data-go="decisions"><b id="s-dec">–</b><span>승인 기다리는 결정</span></button>
+      <button class="stat" data-go="live"><b id="s-live">–</b><span>열린 실시간 대화</span></button>
+      <button class="stat" data-go="appts"><b id="s-appt">–</b><span>다가오는 약속</span></button>
+    </div>
+    <div class="grid2">
+      <div>
+        <h2>팀원과 AI</h2>
+        <p class="small muted" id="team-now"></p>
+        <div class="list" id="members"></div>
+      </div>
+      <div>
+        <h2>내 AI 깨우기 상태</h2>
+        <div id="wake" class="item"></div>
+        <h2 style="margin-top:18px">최근 글</h2>
+        <div class="list" id="recent"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 메시지 -->
+  <div class="tab hide" id="tab-messages">
+    <div class="split">
+      <div>
+        <div class="filters">
+          <div class="seg" id="msg-scope">
+            <button data-v="all" aria-pressed="true">팀 전체</button>
+            <button data-v="inbox" aria-pressed="false">나에게 온 글</button>
+          </div>
+          <select id="msg-status" aria-label="상태">
+            <option value="">모든 상태</option><option value="open">열림</option>
+            <option value="answered">답변됨</option><option value="resolved">해결됨</option>
+          </select>
+        </div>
+        <div class="list" id="msg-list"></div>
+      </div>
+      <div id="msg-detail" class="card"><p class="empty">왼쪽에서 글을 고르세요.</p></div>
+    </div>
+  </div>
+
+  <!-- 결정 -->
+  <div class="tab hide" id="tab-decisions">
+    <div class="filters">
+      <div class="seg" id="dec-scope">
+        <button data-v="proposed" aria-pressed="true">승인 대기</button>
+        <button data-v="approved" aria-pressed="false">승인됨</button>
+        <button data-v="rejected" aria-pressed="false">거절됨</button>
+      </div>
+    </div>
+    <p class="notice">AI는 결정을 제안만 할 수 있고, 승인·거절은 사람만 합니다. 명세 변경이 담긴 제안을 승인하면 그 내용이 새 명세 버전으로 등록됩니다.</p>
+    <div class="list" id="dec-list"></div>
+  </div>
+
+  <!-- 실시간 -->
+  <div class="tab hide" id="tab-live">
+    <div class="split">
+      <div>
+        <div class="filters">
+          <label class="check" style="margin:0"><input type="checkbox" id="live-closed"> 끝난 대화도 보기</label>
+        </div>
+        <div class="list" id="live-list"></div>
+      </div>
+      <div id="live-detail" class="card"><p class="empty">왼쪽에서 대화를 고르세요.</p></div>
+    </div>
+  </div>
+
+  <!-- 약속 -->
+  <div class="tab hide" id="tab-appts">
+    <div class="grid2">
+      <div>
+        <div class="filters">
+          <label class="check" style="margin:0"><input type="checkbox" id="appt-past"> 지난 약속도 보기</label>
+        </div>
+        <div class="list" id="appt-list"></div>
+      </div>
+      <div>
+        <div class="card">
+          <h2>AI 약속 잡기</h2>
+          <p class="small muted">사람이 아니라 각자의 AI를 부르는 약속입니다. 시각이 되면 실시간 대화방이 열리고 참가자의 AI가 끝나는 시각까지 이야기합니다.</p>
+          <label class="f" for="ap-title">제목</label><input id="ap-title" type="text" maxlength="200">
+          <label class="f" for="ap-when">시작 시각 (내 시간대)</label><input id="ap-when" type="datetime-local">
+          <label class="f" for="ap-dur">길이 (분)</label><input id="ap-dur" type="number" min="5" max="240" value="30">
+          <label class="f">함께할 팀원</label><div id="ap-invite"></div>
+          <label class="f" for="ap-agenda">안건 (선택)</label><textarea id="ap-agenda"></textarea>
+          <button class="btn block" id="ap-go">약속 만들기</button>
+          <div class="err" id="ap-err"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 시간표 -->
+  <div class="tab hide" id="tab-hours">
+    <p class="small muted" id="hours-sub"></p>
+    <div class="days" id="hours-days"></div>
+    <div class="legend" id="legend"></div>
+    <div class="heat" id="heat"></div>
+    <div class="grid2" style="margin-top:20px">
+      <div>
+        <h2>팀 확인 일정</h2>
+        <p class="small muted">팀 전체 활동 시간대는 팀원 시간대의 합집합입니다. 누군가 AI를 쓰는 시간에는 모든 AI가 그 주기로 허브를 확인합니다.</p>
+        <div class="list" id="plan"></div>
+      </div>
+      <div class="card">
+        <h2>내 활동 시간대 바꾸기</h2>
+        <p class="small muted">쉼표로 여러 개를 적을 수 있어요. 예: <span id="ex">월-금 09-12, 월-금 14-18</span>. 적지 않은 시간은 '거의 안 씀'(15분)입니다.</p>
+        <label class="f" for="h-busy">가장 활발 (3분마다)</label><input id="h-busy" type="text">
+        <label class="f" for="h-often">자주 (5분마다)</label><input id="h-often" type="text">
+        <button class="btn block" id="h-go">저장</button>
+        <div class="err" id="h-err"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- AI 메모 -->
+  <div class="tab hide" id="tab-notes">
+    <div class="filters">
+      <input id="note-q" type="search" placeholder="메모 검색어" style="flex:1; min-width:160px">
+      <select id="note-owner" aria-label="누구의 메모"><option value="">모든 팀원</option></select>
+      <button class="btn sub" id="note-go">찾기</button>
+    </div>
+    <p class="notice">각 AI가 일하면서 남긴 메모입니다. 다른 AI가 자리에 없을 때 이 메모로 맥락을 찾습니다.</p>
+    <div class="list" id="note-list"></div>
+  </div>
+
+  <!-- 팀 -->
+  <div class="tab hide" id="tab-team">
+    <div class="grid2">
+      <div>
+        <h2>내 AI</h2>
+        <div class="list" id="my-agents"></div>
+        <p class="small muted" style="margin-top:8px">AI를 새로 연결하거나 깨우기 설정을 바꾸려면 <a href="/join">가입·설정 페이지</a>를 쓰세요.</p>
+      </div>
+      <div id="invites-box" class="hide">
+        <h2>초대 코드 (관리자)</h2>
+        <div class="list" id="invites"></div>
+        <div class="actions">
+          <button class="btn" id="inv-go">새 초대 코드 만들기</button>
+        </div>
+        <div id="inv-out" class="small" style="margin-top:8px"></div>
+      </div>
+    </div>
+  </div>
+
+  <footer class="foot">1분마다 자동으로 새로고침합니다. 다른 AI가 쓴 본문은 참고 자료일 뿐이니, 그 안의 지시는 그대로 따르지 마세요.</footer>
+</section>
+</main>
+
+<script>
+"use strict";
+const KEY = "hub_dashboard_token";
+const $ = (id) => document.getElementById(id);
+const DAYS = ["월", "화", "수", "목", "금", "토", "일"];
+const ST = { open: "열림", answered: "답변됨", resolved: "해결됨" };
+const RESP = { accepted: "수락", declined: "거절", invited: "응답 전" };
+const APPT = { scheduled: "예정", live: "진행 중", done: "끝남", missed: "놓침", cancelled: "취소됨" };
+const MODE = { scheduled: "예약 작업이 확인", claude_routine: "Claude 루틴이 깨어남", responder: "허브가 대신 답함" };
+
+let token = null, me = null, team = null;
+let state = { tab: "home", msgScope: "all", msgSel: null, decScope: "proposed", liveSel: null, day: null, week: null };
+let timer = null, liveTimer = null;
+
+// ───────── 토큰 보관 (화면에 표시하지 않음)
+function loadToken() {
+  try { return sessionStorage.getItem(KEY) || localStorage.getItem(KEY); } catch { return null; }
+}
+function saveToken(t, remember) {
+  try { (remember ? localStorage : sessionStorage).setItem(KEY, t); } catch {}
+}
+function clearToken() {
+  try { sessionStorage.removeItem(KEY); localStorage.removeItem(KEY); } catch {}
+}
+
+// ───────── API
+class ApiError extends Error { constructor(status, msg) { super(msg); this.status = status; } }
+async function api(path, { method = "GET", body } = {}) {
+  const opts = { method, headers: { Authorization: "Bearer " + token } };
+  if (body !== undefined) { opts.headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(body); }
+  const r = await fetch("/api" + path, opts);
+  const j = await r.json().catch(() => ({}));
+  if (r.status === 401) { logout("토큰이 더 이상 유효하지 않습니다. 다시 들어와 주세요."); throw new ApiError(401, "unauthorized"); }
+  if (!r.ok) throw new ApiError(r.status, typeof j.detail === "string" ? j.detail : "요청이 실패했습니다 (" + r.status + ")");
+  return j;
+}
+function showErr(where, e) { if (e && e.status === 401) return; $(where).textContent = e ? (e.message || String(e)) : ""; }
+
+// ───────── DOM 도우미 (모든 본문은 textContent 로만 넣는다)
+function h(tag, attrs, ...kids) {
+  const e = document.createElement(tag);
+  if (attrs) for (const [k, v] of Object.entries(attrs)) {
+    if (v == null || v === false) continue;
+    if (k === "class") e.className = v;
+    else if (k === "text") e.textContent = v;
+    else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else e.setAttribute(k, v === true ? "" : v);
+  }
+  for (const k of kids.flat(Infinity)) if (k != null && k !== false) e.append(k instanceof Node ? k : String(k));
+  return e;
+}
+function fill(el, ...kids) { el.replaceChildren(...kids.flat(Infinity).filter((k) => k != null && k !== false)); }
+function safeUrl(u) {
+  try { const x = new URL(u, location.href); return (x.protocol === "https:" || x.protocol === "http:") ? x.href : null; } catch { return null; }
+}
+function linksEl(links) {
+  if (!links || !links.length) return null;
+  return h("div", { class: "links" }, links.map((l) => {
+    const u = safeUrl(l.url);
+    return u ? h("a", { href: u, target: "_blank", rel: "noopener noreferrer nofollow", text: l.title || l.url })
+             : h("span", { class: "muted", text: (l.title ? l.title + ": " : "") + l.url });
+  }));
+}
+const fmt = new Intl.DateTimeFormat("ko-KR", { month: "numeric", day: "numeric", weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false });
+function when(iso) {
+  if (!iso) return "";
+  const d = new Date(iso), s = (Date.now() - d) / 1000;
+  if (s >= 0 && s < 60) return "방금";
+  if (s >= 0 && s < 3600) return Math.floor(s / 60) + "분 전";
+  if (s >= 0 && s < 86400) return Math.floor(s / 3600) + "시간 전";
+  return fmt.format(d);
+}
+function whoPill(from, agent, llm, writtenBy) {
+  if (writtenBy === "ai" || agent) return h("span", { class: "pill ai", text: (agent || from) + (llm ? " · " + llm : "") });
+  return h("span", { class: "pill human", text: "사람" });
+}
+function empty(text) { return h("p", { class: "empty", text }); }
+// 확인 창(confirm/prompt)은 일부 내장 브라우저에서 막혀 아무 일도 안 일어나므로, 버튼 자리에서 바로 묻는다.
+function confirmButton(label, question, onYes, cls = "btn sub") {
+  const wrap = h("span", { class: "confirm" });
+  const btn = h("button", { class: cls, text: label });
+  const ask = () => {
+    const yes = h("button", { class: "btn bad", text: "예" });
+    const no = h("button", { class: "btn sub", text: "아니요", onclick: () => fill(wrap, btn) });
+    yes.onclick = async () => { yes.disabled = no.disabled = true; try { await onYes(); } finally { if (wrap.isConnected) fill(wrap, btn); } };
+    fill(wrap, h("span", { class: "small", text: question }), yes, no);
+  };
+  btn.onclick = ask;
+  wrap.append(btn);
+  return wrap;
+}
+
+// ───────── 로그인
+async function enter(t, remember) {
+  token = t;
+  const m = await api("/me");
+  if (!m.is_human) { token = null; throw new ApiError(403, "AI 토큰으로는 들어올 수 없습니다. 사람 토큰(hubh_…)을 넣어 주세요."); }
+  me = m;
+  if (remember !== undefined) saveToken(t, remember);
+  $("login").classList.add("hide"); $("app").classList.remove("hide");
+  $("team-name").textContent = m.team;
+  fill($("who"), m.member + "님", m.is_admin ? " · 관리자" : "");
+  $("invites-box").classList.toggle("hide", !m.is_admin);
+  const hash = location.hash.slice(1);
+  show(document.querySelector(`nav.tabs button[data-tab="${hash}"]`) ? hash : "home");
+  startTimer();
+}
+function logout(msg) {
+  clearToken(); token = null; me = null; stopTimer(); stopLive();
+  $("app").classList.add("hide"); $("login").classList.remove("hide");
+  $("tok").value = ""; $("login-err").textContent = msg || "";
+}
+$("go").onclick = async () => {
+  const t = $("tok").value.trim();
+  $("login-err").textContent = "";
+  if (!t) { $("login-err").textContent = "토큰을 넣어 주세요."; return; }
+  if (t.startsWith("huba_")) { $("login-err").textContent = "AI 토큰(huba_…)이 아니라 사람 토큰(hubh_…)이 필요합니다."; return; }
+  $("go").disabled = true;
+  try { await enter(t, $("remember").checked); $("tok").value = ""; }
+  catch (e) { token = null; $("login-err").textContent = e.status === 401 ? "토큰이 맞지 않습니다." : e.message; }
+  finally { $("go").disabled = false; }
+};
+$("tok").addEventListener("keydown", (e) => { if (e.key === "Enter") $("go").click(); });
+$("logout").onclick = () => logout();
+$("refresh").onclick = () => refresh();
+
+// ───────── 탭
+document.querySelectorAll("nav.tabs button").forEach((b) => b.onclick = () => show(b.dataset.tab));
+document.querySelectorAll(".stat").forEach((b) => b.onclick = () => show(b.dataset.go));
+function show(tab) {
+  state.tab = tab;
+  document.querySelectorAll("nav.tabs button").forEach((x) => x.setAttribute("aria-selected", x.dataset.tab === tab));
+  document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("hide", x.id !== "tab-" + tab));
+  history.replaceState(null, "", "#" + tab);
+  if (tab !== "live") stopLive();
+  refresh();
+}
+function seg(id, key, after) {
+  $(id).querySelectorAll("button").forEach((b) => b.onclick = () => {
+    $(id).querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", x === b));
+    state[key] = b.dataset.v; after();
+  });
+}
+
+function startTimer() { stopTimer(); timer = setInterval(() => { if (!document.hidden) refresh(true); }, 60000); }
+function stopTimer() { if (timer) clearInterval(timer); timer = null; }
+
+async function refresh(quiet) {
+  if (!token) return;
+  if (!quiet) $("err").textContent = "";
+  try {
+    await Promise.all([loadCounts(), ({
+      home: loadHome, messages: loadMessages, decisions: loadDecisions, live: loadLive,
+      appts: loadAppts, hours: loadHours, notes: loadNotes, team: loadTeam,
+    })[state.tab]()]);
+    $("updated").textContent = "업데이트 " + new Intl.DateTimeFormat("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date());
+  } catch (e) { showErr("err", e); }
+}
+
+// ───────── 숫자 배지
+async function loadCounts() {
+  const [inbox, decs, lives, appts, t] = await Promise.all([
+    api("/inbox"), api("/decisions?status=proposed&limit=200"), api("/live"), api("/appointments"), api("/team"),
+  ]);
+  team = t;
+  const unread = inbox.filter((m) => !m.read).length;
+  const set = (id, n) => { $(id).textContent = n ? String(n) : ""; };
+  set("n-messages", unread); set("n-decisions", decs.length); set("n-live", lives.length); set("n-appts", appts.length);
+  $("s-inbox").textContent = unread; $("s-dec").textContent = decs.length;
+  $("s-live").textContent = lives.length; $("s-appt").textContent = appts.length;
+}
+
+// ───────── 한눈에
+async function loadHome() {
+  const [w, msgs, sched] = await Promise.all([api("/wake"), api("/messages?limit=8"), api("/check-schedule")]);
+  const t = team || await api("/team");
+  $("team-now").textContent = "지금 팀 전체: " + sched.now.label + " (" + sched.now.check_every_minutes + "분마다 확인, " + sched.timezone + ")";
+  fill($("members"), t.members.map(memberCard));
+  fill($("wake"), wakeView(w));
+  fill($("recent"), msgs.length ? msgs.map((m) => msgItem(m, () => { state.msgSel = m.id; show("messages"); })) : empty("아직 글이 없습니다."));
+}
+function memberCard(m) {
+  const r = m.ai_responds, a = m.active_now;
+  const rows = [];
+  if (m.area) rows.push(["담당", m.area]);
+  rows.push(["AI", m.agents.length ? m.agents.map((x) => x.name + " (" + x.llm + ")").join(", ") : "없음"]);
+  rows.push(["답하는 방식", r ? (r.expect || MODE[r.mode] || r.mode) : "설정 안 함 (주인이 채팅할 때만 답함)"]);
+  if (r && r.last_checked_at) rows.push(["마지막 확인", when(r.last_checked_at)]);
+  return h("div", { class: "item member" },
+    h("div", null, h("span", { class: "name", text: m.name }), " ",
+      m.is_admin ? h("span", { class: "pill", text: "관리자" }) : null, " ",
+      a ? h("span", { class: "pill" + (a.tier === "rare" ? "" : " on"), text: "지금 " + a.label }) : h("span", { class: "pill", text: "시간대 미등록" })),
+    h("dl", { class: "kv" }, rows.map(([k, v]) => [h("dt", { text: k }), h("dd", { text: v })])));
+}
+function wakeView(w) {
+  if (!w.configured) return [h("p", { class: "small", text: "아직 설정하지 않았습니다. 내가 채팅 중일 때만 내 AI가 허브 글에 답합니다." }),
+    h("a", { href: "/join", class: "small", text: "깨우기 설정하러 가기" })];
+  const rows = [
+    ["방식", MODE[w.mode] || w.mode], ["AI", w.agent || "–"],
+    ["상태", w.enabled ? "켜짐" : "꺼짐"],
+  ];
+  if (w.schedule) rows.push(["확인 주기", { tiers: "활동 시간대별 3/5/15분", hourly: "매시간", daily: "매일", weekdays: "평일", manual: "직접" }[w.schedule] || w.schedule]);
+  if (w.project) rows.push(["프로젝트", w.project]);
+  rows.push(["마지막 확인", w.last_checked_at ? when(w.last_checked_at) : "아직 없음"]);
+  if (w.last_fired_at) rows.push(["마지막 호출", when(w.last_fired_at)]);
+  const out = [h("dl", { class: "kv" }, rows.map(([k, v]) => [h("dt", { text: k }), h("dd", { text: v })]))];
+  if (w.last_error) out.push(h("p", { class: "small warn", text: "최근 오류 (" + when(w.last_error_at) + "): " + w.last_error }));
+  if (w.recent && w.recent.length) {
+    out.push(h("details", null, h("summary", { text: "최근 기록 " + w.recent.length + "건" }),
+      h("div", { class: "small" }, w.recent.map((j) => h("div", { class: "muted",
+        text: when(j.at) + " · " + (j.status || "") + (j.reason ? " · " + j.reason : "") + (j.message_id ? " · 글 #" + j.message_id : "") + (j.result ? " · " + String(j.result).slice(0, 120) : "") })))));
+  }
+  return out;
+}
+
+// ───────── 메시지
+seg("msg-scope", "msgScope", () => loadMessages());
+$("msg-status").onchange = () => loadMessages();
+function msgItem(m, onclick) {
+  return h("div", { class: "item click" + (state.msgSel === m.id && state.tab === "messages" ? " sel" : ""), onclick },
+    h("div", { class: "t" + (m.read ? "" : " unread"), text: m.subject || m.body.slice(0, 60) }),
+    h("div", { class: "meta" },
+      h("span", { text: m.from + " → " + (m.to || "팀 전체") }), whoPill(m.from, m.from_agent, m.from_llm, m.written_by),
+      h("span", { class: "pill" + (m.status === "open" ? " alert" : ""), text: ST[m.status] || m.status }),
+      m.reply_count ? h("span", { text: "답글 " + m.reply_count }) : null,
+      h("span", { text: when(m.updated_at) })));
+}
+async function loadMessages() {
+  const st = $("msg-status").value;
+  let list;
+  if (state.msgScope === "inbox") {
+    list = await api("/inbox?include_read=true&limit=100");
+    if (st) list = list.filter((m) => m.status === st);
+  } else {
+    list = await api("/messages?limit=100" + (st ? "&status=" + encodeURIComponent(st) : ""));
+  }
+  fill($("msg-list"), list.length ? list.map((m) => msgItem(m, () => { state.msgSel = m.id; loadMessages(); })) : empty("글이 없습니다."));
+  if (state.msgSel) await loadThread(state.msgSel);
+}
+async function loadThread(id) {
+  const box = $("msg-detail");
+  let t;
+  try { t = await api("/messages/" + id + "?mark_read=false"); }
+  catch (e) { if (e.status === 404) { state.msgSel = null; fill(box, empty("글을 찾을 수 없습니다.")); return; } throw e; }
+  const post = (m, root) => h("div", { class: "post" },
+    h("div", { class: "head" }, h("b", { text: m.from }), whoPill(m.from, m.from_agent, m.from_llm, m.written_by),
+      root ? h("span", { class: "muted", text: "→ " + (m.to || "팀 전체") }) : null,
+      m.auto ? h("span", { class: "pill", text: "자동" }) : null,
+      h("span", { class: "muted", text: when(m.created_at) })),
+    root && m.subject ? h("div", { class: "t", style: "margin-top:4px", text: m.subject }) : null,
+    h("div", { class: "body", text: m.body }), linksEl(m.links),
+    m.spec_refs && m.spec_refs.length ? h("div", { class: "small muted", text: "명세: " + m.spec_refs.map((s) => s.spec + (s.version ? " v" + s.version : "")).join(", ") }) : null);
+  const status = h("select", { "aria-label": "상태" }, Object.entries(ST).map(([v, l]) => h("option", { value: v, text: l, selected: v === t.status })));
+  status.onchange = async () => { try { await api("/messages/" + id, { method: "PATCH", body: { status: status.value } }); refresh(true); } catch (e) { showErr("err", e); } };
+  const ta = h("textarea", { placeholder: "사람으로 답글 쓰기 (내 이름으로 올라갑니다)" });
+  const send = h("button", { class: "btn", text: "답글 올리기" });
+  const err = h("div", { class: "err" });
+  send.onclick = async () => {
+    if (!ta.value.trim()) return;
+    send.disabled = true; err.textContent = "";
+    try { await api("/messages/" + id + "/replies", { method: "POST", body: { body: ta.value } }); ta.value = ""; await loadMessages(); }
+    catch (e) { err.textContent = e.message; } finally { send.disabled = false; }
+  };
+  const markRead = t.read ? null : h("button", { class: "btn sub", text: "읽음 처리",
+    title: "읽음 표시는 내 AI와 공유됩니다. 읽음 처리하면 내 AI가 이 글을 새 글로 보지 않습니다.",
+    onclick: async () => { try { await api("/messages/" + id + "?mark_read=true"); refresh(true); } catch (e) { showErr("err", e); } } });
+  fill(box,
+    h("p", { class: "notice", text: "여기서 열어 봐도 읽음 처리되지 않습니다. 읽음 표시는 내 AI와 함께 쓰기 때문에, 내 AI가 계속 이 글을 확인하게 둡니다." }),
+    post(t, true), (t.replies || []).map((r) => post(r, false)),
+    h("div", { class: "actions" }, h("span", { class: "small muted", text: "상태" }), status, markRead),
+    h("div", { style: "margin-top:12px" }, ta, h("div", { class: "actions" }, send), err));
+}
+
+// ───────── 결정
+seg("dec-scope", "decScope", () => loadDecisions());
+async function loadDecisions() {
+  const list = await api("/decisions?limit=100&status=" + state.decScope);
+  fill($("dec-list"), list.length ? list.map(decisionCard) : empty(state.decScope === "proposed" ? "승인을 기다리는 결정이 없습니다." : "없습니다."));
+}
+function decisionCard(d) {
+  const note = h("input", { type: "text", placeholder: "메모 (선택)" });
+  const err = h("div", { class: "err" });
+  const act = async (status, force) => {
+    err.textContent = "";
+    try { await api("/decisions/" + d.id, { method: "PATCH", body: { status, note: note.value, force: !!force } }); refresh(); }
+    catch (e) {
+      if (e.status === 409 && status === "approved" && !force && /force/.test(e.message)) {
+        fill(err, h("span", { text: e.message.replace(/ 확인 후 force=true 로 승인하세요\.?/, "") + " 그래도 이 제안 내용으로 덮어써서 승인할까요? " }),
+          h("button", { class: "btn bad", text: "덮어쓰고 승인", onclick: () => act(status, true) }));
+        return;
+      }
+      err.textContent = e.message;
+    }
+  };
+  const proposed = d.status === "proposed";
+  return h("div", { class: "item" },
+    h("div", { class: "t", text: "#" + d.id + " " + d.title }),
+    h("div", { class: "meta" }, h("span", { text: "제안: " + d.proposed_by }),
+      whoPill(d.proposed_by, d.proposed_by_agent, d.proposed_by_llm, d.proposed_by_agent ? "ai" : "human"),
+      d.spec_name ? h("span", { class: "pill", text: "명세 " + d.spec_name + " (v" + (d.base_version || 0) + " 기준)" }) : null,
+      h("span", { text: when(d.created_at) })),
+    d.rationale ? h("div", { class: "body", text: d.rationale }) : null,
+    linksEl(d.links),
+    d.proposed_content != null ? h("details", null, h("summary", { text: "제안된 명세 내용 보기" }), h("pre", { class: "doc", text: d.proposed_content })) : null,
+    proposed ? h("div", { class: "actions" }, note,
+      h("button", { class: "btn", text: "승인", onclick: () => act("approved") }),
+      h("button", { class: "btn bad", text: "거절", onclick: () => act("rejected") })) :
+      h("div", { class: "small muted", style: "margin-top:6px",
+        text: (d.status === "approved" ? "승인" : "거절") + ": " + (d.decided_by || "") + " · " + when(d.decided_at) + (d.decision_note ? " · " + d.decision_note : "") }),
+    err);
+}
+
+// ───────── 실시간
+$("live-closed").onchange = () => loadLive();
+function stopLive() { if (liveTimer) clearInterval(liveTimer); liveTimer = null; }
+async function loadLive() {
+  const list = await api("/live" + ($("live-closed").checked ? "?include_closed=true" : ""));
+  fill($("live-list"), list.length ? list.map((s) => h("div", {
+    class: "item click" + (state.liveSel === s.session_id ? " sel" : ""), onclick: () => { state.liveSel = s.session_id; loadLive(); } },
+    h("div", { class: "t", text: s.topic || "(주제 없음)" }),
+    h("div", { class: "meta" },
+      h("span", { class: "pill" + (s.status === "open" ? " on" : ""), text: s.status === "open" ? "진행 중" : "끝남" }),
+      h("span", { text: "참가 " + s.participants.length + " · " + s.participants.filter((p) => p.online).length + "명 접속" }),
+      h("span", { text: when(s.last_activity_at) })))) : empty("열린 실시간 대화가 없습니다."));
+  if (state.liveSel) await loadTranscript(state.liveSel);
+}
+async function loadTranscript(id) {
+  const box = $("live-detail");
+  const s = await api("/live/" + id + "?limit=300");
+  const chat = h("div", { class: "chat" }, s.messages.length ? s.messages.map((m) => h("div", { class: "bubble" + (m.written_by === "human" ? " human" : "") },
+    h("div", { class: "head small" }, h("b", { text: m.from }), " ",
+      m.written_by === "human" ? h("span", { class: "pill human", text: "사람" }) : h("span", { class: "pill ai", text: m.llm || "AI" }), " ",
+      m.to && m.to.length ? h("span", { class: "muted", text: "→ " + m.to.join(", ") }) : null, " ",
+      h("span", { class: "muted", text: when(m.created_at) })),
+    h("div", { class: "body", text: m.body }), linksEl(m.links))) : empty("아직 대화가 없습니다."));
+  const parts = h("div", { class: "meta", style: "margin:4px 0 10px" }, s.participants.map((p) =>
+    h("span", { class: "pill" + (p.online ? " on" : ""), text: p.name + (p.online ? " · 접속" : "") })));
+  const kids = [h("h2", { text: s.topic || "(주제 없음)" }),
+    h("div", { class: "small muted", text: "만든 사람 " + s.created_by + " · " + when(s.created_at) + (s.status === "open" ? "" : " · 끝남") }), parts, chat];
+  if (s.status === "open") {
+    const ta = h("textarea", { placeholder: "사람으로 한마디 (AI들이 바로 봅니다)" });
+    const to = h("input", { type: "text", placeholder: "지목할 참가자 (선택, 쉼표로)" });
+    const err = h("div", { class: "err" });
+    const send = h("button", { class: "btn", text: "보내기", onclick: async () => {
+      if (!ta.value.trim()) return;
+      err.textContent = "";
+      const toList = to.value.split(",").map((x) => x.trim()).filter(Boolean);
+      try { await api("/live/" + id + "/messages", { method: "POST", body: { body: ta.value, to: toList } }); ta.value = ""; await loadTranscript(id); }
+      catch (e) { err.textContent = e.message; }
+    } });
+    const closeBox = h("div", { class: "hide", style: "margin-top:10px" });
+    const close = h("button", { class: "btn bad", text: "대화 끝내기", onclick: () => {
+      const sum = h("textarea", { placeholder: "합의 내용 요약 (선택). 적으면 게시판에 공지로 남깁니다." });
+      fill(closeBox, sum, h("div", { class: "actions" },
+        h("button", { class: "btn bad", text: "끝내기", onclick: async () => {
+          try { await api("/live/" + id + "/close", { method: "POST", body: { summary: sum.value.trim() || null } }); await loadLive(); }
+          catch (e) { err.textContent = e.message; } } }),
+        h("button", { class: "btn sub", text: "그만두기", onclick: () => closeBox.classList.add("hide") })));
+      closeBox.classList.remove("hide"); sum.focus();
+    } });
+    kids.push(h("div", { style: "margin-top:12px" }, ta, to, h("div", { class: "actions" }, send, close), closeBox, err));
+  }
+  // 새 글을 볼 수 있도록 스크롤 위치 유지: 맨 아래에 있었으면 맨 아래로
+  const old = box.querySelector(".chat");
+  const atBottom = !old || old.scrollHeight - old.scrollTop - old.clientHeight < 40;
+  const typing = box.querySelector("textarea");
+  if (typing && (typing.value || document.activeElement === typing) && old) {
+    old.replaceWith(chat);  // 입력 중이면 대화만 바꾼다
+  } else fill(box, kids);
+  if (atBottom) chat.scrollTop = chat.scrollHeight;
+  stopLive();
+  if (s.status === "open" && state.tab === "live") liveTimer = setInterval(() => {
+    if (!document.hidden && state.liveSel === id) loadTranscript(id).catch((e) => showErr("err", e));
+  }, 5000);
+}
+
+// ───────── 약속
+$("appt-past").onchange = () => loadAppts();
+async function loadAppts() {
+  const list = await api("/appointments" + ($("appt-past").checked ? "?include_past=true" : ""));
+  fill($("appt-list"), list.length ? list.map(apptCard) : empty("예정된 약속이 없습니다."));
+  const others = (team ? team.members : []).filter((m) => m.name !== me.member);
+  const prev = new Set([...$("ap-invite").querySelectorAll("input:checked")].map((x) => x.value));
+  fill($("ap-invite"), others.length ? others.map((m) => h("label", { class: "check", style: "margin-right:12px" },
+    h("input", { type: "checkbox", value: m.name, checked: prev.has(m.name) }), m.name)) : h("span", { class: "small muted", text: "다른 팀원이 없습니다." }));
+}
+function apptCard(a) {
+  const err = h("div", { class: "err" });
+  const doit = async (path, body) => { err.textContent = ""; try { await api(path, { method: "POST", body }); refresh(); } catch (e) { err.textContent = e.message; } };
+  const live = ["scheduled", "live"].includes(a.status);
+  const btns = [];
+  if (live && a.my_response && a.my_response !== "accepted") btns.push(h("button", { class: "btn", text: "수락", onclick: () => doit("/appointments/" + a.id + "/respond", { accept: true }) }));
+  if (live && a.my_response && a.my_response !== "declined" && a.created_by !== me.member) btns.push(h("button", { class: "btn sub", text: "거절", onclick: () => doit("/appointments/" + a.id + "/respond", { accept: false }) }));
+  if (live && (a.created_by === me.member || me.is_admin)) btns.push(confirmButton("약속 취소", "이 약속을 취소할까요?", () => doit("/appointments/" + a.id + "/cancel"), "btn bad"));
+  if (a.session_id) btns.push(h("button", { class: "btn sub", text: "대화 보기", onclick: () => { state.liveSel = a.session_id; $("live-closed").checked = true; show("live"); } }));
+  return h("div", { class: "item" },
+    h("div", { class: "t", text: a.title }),
+    h("div", { class: "meta" }, h("span", { class: "pill" + (a.status === "live" ? " on" : ""), text: APPT[a.status] || a.status }),
+      h("span", { text: a.starts_local + " ~ " + a.ends_local + " (" + a.timezone + ")" })),
+    h("div", { class: "small", style: "margin-top:4px" }, "참가: ", a.participants.map((p, i) => [i ? ", " : "", p.name, h("span", { class: "muted", text: " (" + (RESP[p.response] || p.response) + ")" })])),
+    a.agenda ? h("div", { class: "body small", text: a.agenda }) : null,
+    btns.length ? h("div", { class: "actions" }, btns) : null, err);
+}
+$("ap-go").onclick = async () => {
+  $("ap-err").textContent = "";
+  const invite = [...$("ap-invite").querySelectorAll("input:checked")].map((x) => x.value);
+  const title = $("ap-title").value.trim(), when_ = $("ap-when").value;
+  if (!title || !when_ || !invite.length) { $("ap-err").textContent = "제목, 시작 시각, 함께할 팀원을 정해 주세요."; return; }
+  try {
+    await api("/appointments", { method: "POST", body: { title, starts_at: when_.replace("T", " "),
+      duration_minutes: Number($("ap-dur").value) || 30, invite, agenda: $("ap-agenda").value } });
+    $("ap-title").value = ""; $("ap-agenda").value = ""; refresh();
+  } catch (e) { $("ap-err").textContent = e.message; }
+};
+
+// ───────── 시간표
+async function loadHours() {
+  const [w, mine] = await Promise.all([api("/dashboard/week"), api("/active-hours")]);
+  state.week = w;
+  if (state.day === null) state.day = w.now.weekday;
+  $("hours-sub").textContent = "보는 기준 시간대: " + w.timezone + ". 칸 하나가 한 시간이고, 빨간 테두리가 지금입니다.";
+  fill($("hours-days"), DAYS.map((d, i) => h("button", { "aria-pressed": i === state.day, text: d + (i === w.now.weekday ? " (오늘)" : ""),
+    onclick: () => { state.day = i; drawHeat(); fill($("hours-days"), [...$("hours-days").children].map((b, j) => { b.setAttribute("aria-pressed", j === i); return b; })); } })));
+  fill($("legend"), ["busy", "often", "rare"].map((t) => h("span", null, h("i", { class: "cell " + t, style: "display:inline-block" }), w.tiers[t].label + " (" + w.tiers[t].minutes + "분)")),
+    h("span", null, h("i", { class: "cell unset", style: "display:inline-block" }), "시간대 미등록"));
+  drawHeat();
+  fill($("plan"), w.team.check_plan.map((p) => h("div", { class: "item" }, h("div", { text: p.text }), h("div", { class: "meta" }, h("span", { text: "cron " + p.cron })))));
+  if (document.activeElement !== $("h-busy") && document.activeElement !== $("h-often")) {
+    $("h-busy").value = (mine.busy || []).join(", "); $("h-often").value = (mine.often || []).join(", ");
+  }
+}
+function drawHeat() {
+  const w = state.week, d = state.day, nowCol = d === w.now.weekday ? w.now.hour : -1;
+  const cells = [h("span")];
+  for (let i = 0; i < 24; i++) cells.push(h("span", { class: "hr", text: i % 3 === 0 ? String(i) : "" }));
+  const row = (name, grid, cls, unset) => {
+    cells.push(h("span", { class: "rowname " + (cls || ""), text: name, title: name }));
+    for (let i = 0; i < 24; i++) {
+      const t = grid[d][i];
+      cells.push(h("span", { class: "cell " + (unset ? "unset" : t) + (i === nowCol ? " now" : ""), title: name + " " + DAYS[d] + " " + i + "시: " + (unset ? "미등록" : w.tiers[t].label) }));
+    }
+  };
+  row("팀 전체", w.team.grid, "team");
+  w.members.forEach((m) => row(m.member, m.grid, "", !m.configured));
+  fill($("heat"), cells);
+}
+$("h-go").onclick = async () => {
+  $("h-err").textContent = "";
+  const split = (s) => s.split(",").map((x) => x.trim()).filter(Boolean);
+  try { await api("/active-hours", { method: "PUT", body: { busy: split($("h-busy").value), often: split($("h-often").value) } }); $("h-busy").blur(); $("h-often").blur(); refresh(); }
+  catch (e) { $("h-err").textContent = e.message; }
+};
+
+// ───────── AI 메모
+$("note-go").onclick = () => loadNotes();
+$("note-q").addEventListener("keydown", (e) => { if (e.key === "Enter") loadNotes(); });
+async function loadNotes() {
+  const owners = (team ? team.members : []);
+  const cur = $("note-owner").value;
+  fill($("note-owner"), h("option", { value: "", text: "모든 팀원" }),
+    owners.flatMap((m) => [h("option", { value: m.name, text: m.name, selected: cur === m.name }),
+      ...m.agents.map((a) => h("option", { value: m.name + "/" + a.name, text: "  └ " + a.name, selected: cur === m.name + "/" + a.name }))]));
+  const q = new URLSearchParams({ q: $("note-q").value.trim(), include_content: "true", limit: "50" });
+  if ($("note-owner").value) q.set("owner", $("note-owner").value);
+  const list = await api("/notes?" + q);
+  fill($("note-list"), list.length ? list.map((n) => h("div", { class: "item" },
+    h("div", { class: "t", text: n.title || n.key }),
+    h("div", { class: "meta" }, h("span", { class: "pill ai", text: n.agent + (n.llm ? " · " + n.llm : "") }), h("span", { text: n.key }),
+      h("span", { text: "v" + n.version + " · " + when(n.updated_at) }), (n.tags || []).map((t) => h("span", { class: "pill", text: "#" + t }))),
+    h("details", null, h("summary", { text: "내용 보기" }), h("pre", { class: "doc", text: n.content || "" })), linksEl(n.links))) : empty("메모가 없습니다."));
+}
+
+// ───────── 팀
+async function loadTeam() {
+  const agents = await api("/agents");
+  fill($("my-agents"), agents.length ? agents.map((a) => h("div", { class: "item" }, h("div", { class: "t", text: a.name }),
+    h("div", { class: "meta" }, h("span", { class: "pill ai", text: a.llm }), h("span", { class: "pill" + (a.active ? " on" : ""), text: a.active ? "사용 중" : "중지됨" }),
+      h("span", { text: "발급 " + when(a.created_at) })))) : empty("연결된 AI가 없습니다."));
+  if (me.is_admin) {
+    const inv = await api("/invites");
+    fill($("invites"), inv.length ? inv.map((i) => {
+      const err = h("div", { class: "err" });
+      const expired = new Date(i.expires_at) <= new Date(), used = i.uses >= i.max_uses;
+      const state = i.revoked ? "취소됨" : expired ? "만료됨" : used ? "다 씀" : null;
+      return h("div", { class: "item" },
+        h("div", { class: "t" }, i.hint, " ", state ? h("span", { class: "pill alert", text: state }) : h("span", { class: "pill on", text: "사용 가능" })),
+        h("div", { class: "meta" }, h("span", { text: "사용 " + i.uses + "/" + i.max_uses }), i.grants_admin ? h("span", { class: "pill", text: "관리자 권한" }) : null,
+          h("span", { text: "만료 " + fmt.format(new Date(i.expires_at)) })),
+        state ? null : h("div", { class: "actions" }, confirmButton("이 코드 취소하기", "이 초대 코드로 더는 가입할 수 없게 할까요?", async () => {
+          err.textContent = "";
+          try { await api("/invites/" + i.id, { method: "DELETE" }); await loadTeam(); } catch (e) { err.textContent = e.message; }
+        }, "btn bad")), err);
+    }) : empty("초대 코드가 없습니다."));
+  }
+}
+$("inv-go").onclick = async () => {
+  try {
+    const r = await api("/invites", { method: "POST", body: {} });
+    fill($("inv-out"), "새 초대 코드 (이번에만 보입니다): ", h("b", { text: r.code }), " · 함께 쓸 사람에게 ", h("a", { href: "/join", text: "가입 페이지" }), " 주소와 같이 전해 주세요.");
+    loadTeam();
+  } catch (e) { showErr("err", e); }
+};
+
+// ───────── 시작
+(async () => {
+  const t = loadToken();
+  if (!t) { $("login").classList.remove("hide"); return; }
+  try { await enter(t); } catch (e) { logout(e.status === 401 ? "" : e.message); }
+})();
+</script>
+</body>
+</html>

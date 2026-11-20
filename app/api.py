@@ -460,6 +460,12 @@ def active_hours_put(body: ActiveHoursIn, p: Me, db: DB):
     return schedule.set_active_hours(db, p, **body.model_dump())
 
 
+@router.get("/dashboard/week", tags=["schedule"], include_in_schema=False)
+def dashboard_week(p: Me, db: DB):
+    """대시보드용: 팀과 팀원별 주간 활동 시간표(7×24)."""
+    return schedule.week_grid(db, p)
+
+
 @router.get("/check-schedule", tags=["schedule"], description="팀 전체 활동 시간대 기준 확인 일정(cron)과 예약 작업 지시문.")
 def check_schedule(p: Me, db: DB):
     return schedule.team_check_schedule(db, p)

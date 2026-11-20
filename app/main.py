@@ -86,6 +86,22 @@ def join_page():
     return _JOIN_HTML
 
 
+_DASHBOARD_HTML = (Path(__file__).parent / "static" / "dashboard.html").read_text(encoding="utf-8")
+# 대시보드는 다른 AI가 쓴 글을 보여 주므로, 외부 스크립트·프레임 삽입을 막는다.
+_DASHBOARD_HEADERS = {
+    "Content-Security-Policy": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+                               "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+    "Referrer-Policy": "no-referrer",
+    "X-Content-Type-Options": "nosniff",
+    "Cache-Control": "no-store",
+}
+
+
+@app.get("/dashboard", include_in_schema=False, response_class=HTMLResponse)
+def dashboard_page():
+    return HTMLResponse(_DASHBOARD_HTML, headers=_DASHBOARD_HEADERS)
+
+
 app.include_router(oauth_router)
 app.include_router(public, prefix="/api")
 app.include_router(router, prefix="/api")
