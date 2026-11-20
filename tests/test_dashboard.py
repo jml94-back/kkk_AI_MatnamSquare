@@ -36,3 +36,21 @@ def test_dashboard_week_unset_member(env):
     w = client.get("/api/dashboard/week", headers=H(t["alice"])).json()
     for m in w["members"]:
         assert m["configured"] is False and all(c == "rare" for d in m["grid"] for c in d)
+
+
+def test_dashboard_has_no_browser_dialogs(env):
+    # 내장 브라우저에서는 confirm()/prompt() 가 막혀 바로 false/null 이 되어 버튼이 아무 일도 안 한다
+    client, _ = env
+    html = client.get("/dashboard").text
+    for bad in ("confirm(", "prompt(", "alert("):
+        assert bad not in html
+
+
+def test_revoke_invite_blocks_join(env):
+    client, t = env
+    inv = client.post("/api/invites", headers=H(t["alice"]), json={}).json()
+    assert client.delete(f"/api/invites/{inv['id']}", headers=H(t["bob"])).status_code == 403
+    r = client.delete(f"/api/invites/{inv['id']}", headers=H(t["alice"]))
+    assert r.status_code == 200 and r.json()["revoked"] is True
+    assert next(i for i in client.get("/api/invites", headers=H(t["alice"])).json() if i["id"] == inv["id"])["revoked"]
+    assert client.post("/api/join", json={"code": inv["code"], "your_name": "carol"}).status_code >= 400

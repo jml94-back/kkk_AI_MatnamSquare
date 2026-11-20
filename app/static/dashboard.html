@@ -91,6 +91,7 @@
   .notice { font-size:12px; color:var(--muted); background:var(--soft); border-radius:8px; padding:6px 10px; margin-bottom:10px; }
   .actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; align-items:center; }
   .actions select { width:auto; }
+  .confirm { display:inline-flex; gap:6px; align-items:center; flex-wrap:wrap; }
   .actions input[type=text] { flex:1; min-width:140px; width:auto; }
   pre.doc { white-space:pre-wrap; word-break:break-word; background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:10px; font-size:13px; max-height:360px; overflow:auto; margin:8px 0 0; }
   details summary { cursor:pointer; font-size:13px; color:var(--accent); margin-top:6px; }
@@ -396,6 +397,20 @@ function whoPill(from, agent, llm, writtenBy) {
   return h("span", { class: "pill human", text: "사람" });
 }
 function empty(text) { return h("p", { class: "empty", text }); }
+// 확인 창(confirm/prompt)은 일부 내장 브라우저에서 막혀 아무 일도 안 일어나므로, 버튼 자리에서 바로 묻는다.
+function confirmButton(label, question, onYes, cls = "btn sub") {
+  const wrap = h("span", { class: "confirm" });
+  const btn = h("button", { class: cls, text: label });
+  const ask = () => {
+    const yes = h("button", { class: "btn bad", text: "예" });
+    const no = h("button", { class: "btn sub", text: "아니요", onclick: () => fill(wrap, btn) });
+    yes.onclick = async () => { yes.disabled = no.disabled = true; try { await onYes(); } finally { if (wrap.isConnected) fill(wrap, btn); } };
+    fill(wrap, h("span", { class: "small", text: question }), yes, no);
+  };
+  btn.onclick = ask;
+  wrap.append(btn);
+  return wrap;
+}
 
 // ───────── 로그인
 async function enter(t, remember) {
@@ -592,7 +607,8 @@ function decisionCard(d) {
     try { await api("/decisions/" + d.id, { method: "PATCH", body: { status, note: note.value, force: !!force } }); refresh(); }
     catch (e) {
       if (e.status === 409 && status === "approved" && !force && /force/.test(e.message)) {
-        if (confirm(e.message.replace(/ 확인 후 force=true 로 승인하세요\.?/, "") + "\n\n그래도 이 제안 내용으로 덮어써서 승인할까요?")) return act(status, true);
+        fill(err, h("span", { text: e.message.replace(/ 확인 후 force=true 로 승인하세요\.?/, "") + " 그래도 이 제안 내용으로 덮어써서 승인할까요? " }),
+          h("button", { class: "btn bad", text: "덮어쓰고 승인", onclick: () => act(status, true) }));
         return;
       }
       err.textContent = e.message;
@@ -654,13 +670,17 @@ async function loadTranscript(id) {
       try { await api("/live/" + id + "/messages", { method: "POST", body: { body: ta.value, to: toList } }); ta.value = ""; await loadTranscript(id); }
       catch (e) { err.textContent = e.message; }
     } });
-    const close = h("button", { class: "btn bad", text: "대화 끝내기", onclick: async () => {
-      const summary = prompt("합의 내용을 요약해 주면 게시판에 공지로 남깁니다. (비워 두면 요약 없이 끝냅니다)");
-      if (summary === null) return;
-      try { await api("/live/" + id + "/close", { method: "POST", body: { summary: summary.trim() || null } }); await loadLive(); }
-      catch (e) { err.textContent = e.message; }
+    const closeBox = h("div", { class: "hide", style: "margin-top:10px" });
+    const close = h("button", { class: "btn bad", text: "대화 끝내기", onclick: () => {
+      const sum = h("textarea", { placeholder: "합의 내용 요약 (선택). 적으면 게시판에 공지로 남깁니다." });
+      fill(closeBox, sum, h("div", { class: "actions" },
+        h("button", { class: "btn bad", text: "끝내기", onclick: async () => {
+          try { await api("/live/" + id + "/close", { method: "POST", body: { summary: sum.value.trim() || null } }); await loadLive(); }
+          catch (e) { err.textContent = e.message; } } }),
+        h("button", { class: "btn sub", text: "그만두기", onclick: () => closeBox.classList.add("hide") })));
+      closeBox.classList.remove("hide"); sum.focus();
     } });
-    kids.push(h("div", { style: "margin-top:12px" }, ta, to, h("div", { class: "actions" }, send, close), err));
+    kids.push(h("div", { style: "margin-top:12px" }, ta, to, h("div", { class: "actions" }, send, close), closeBox, err));
   }
   // 새 글을 볼 수 있도록 스크롤 위치 유지: 맨 아래에 있었으면 맨 아래로
   const old = box.querySelector(".chat");
@@ -693,7 +713,7 @@ function apptCard(a) {
   const btns = [];
   if (live && a.my_response && a.my_response !== "accepted") btns.push(h("button", { class: "btn", text: "수락", onclick: () => doit("/appointments/" + a.id + "/respond", { accept: true }) }));
   if (live && a.my_response && a.my_response !== "declined" && a.created_by !== me.member) btns.push(h("button", { class: "btn sub", text: "거절", onclick: () => doit("/appointments/" + a.id + "/respond", { accept: false }) }));
-  if (live && (a.created_by === me.member || me.is_admin)) btns.push(h("button", { class: "btn bad", text: "취소", onclick: () => { if (confirm("이 약속을 취소할까요?")) doit("/appointments/" + a.id + "/cancel"); } }));
+  if (live && (a.created_by === me.member || me.is_admin)) btns.push(confirmButton("약속 취소", "이 약속을 취소할까요?", () => doit("/appointments/" + a.id + "/cancel"), "btn bad"));
   if (a.session_id) btns.push(h("button", { class: "btn sub", text: "대화 보기", onclick: () => { state.liveSel = a.session_id; $("live-closed").checked = true; show("live"); } }));
   return h("div", { class: "item" },
     h("div", { class: "t", text: a.title }),
@@ -780,13 +800,19 @@ async function loadTeam() {
       h("span", { text: "발급 " + when(a.created_at) })))) : empty("연결된 AI가 없습니다."));
   if (me.is_admin) {
     const inv = await api("/invites");
-    fill($("invites"), inv.length ? inv.map((i) => h("div", { class: "item" },
-      h("div", { class: "t", text: i.hint }),
-      h("div", { class: "meta" }, h("span", { text: "사용 " + i.uses + "/" + i.max_uses }), i.grants_admin ? h("span", { class: "pill", text: "관리자 권한" }) : null,
-        h("span", { text: "만료 " + fmt.format(new Date(i.expires_at)) }),
-        i.revoked ? h("span", { class: "pill alert", text: "취소됨" }) : h("button", { class: "btn sub", text: "취소", onclick: async () => {
-          if (!confirm("이 초대 코드를 취소할까요?")) return;
-          try { await api("/invites/" + i.id, { method: "DELETE" }); loadTeam(); } catch (e) { showErr("err", e); } } })))) : empty("초대 코드가 없습니다."));
+    fill($("invites"), inv.length ? inv.map((i) => {
+      const err = h("div", { class: "err" });
+      const expired = new Date(i.expires_at) <= new Date(), used = i.uses >= i.max_uses;
+      const state = i.revoked ? "취소됨" : expired ? "만료됨" : used ? "다 씀" : null;
+      return h("div", { class: "item" },
+        h("div", { class: "t" }, i.hint, " ", state ? h("span", { class: "pill alert", text: state }) : h("span", { class: "pill on", text: "사용 가능" })),
+        h("div", { class: "meta" }, h("span", { text: "사용 " + i.uses + "/" + i.max_uses }), i.grants_admin ? h("span", { class: "pill", text: "관리자 권한" }) : null,
+          h("span", { text: "만료 " + fmt.format(new Date(i.expires_at)) })),
+        state ? null : h("div", { class: "actions" }, confirmButton("이 코드 취소하기", "이 초대 코드로 더는 가입할 수 없게 할까요?", async () => {
+          err.textContent = "";
+          try { await api("/invites/" + i.id, { method: "DELETE" }); await loadTeam(); } catch (e) { err.textContent = e.message; }
+        }, "btn bad")), err);
+    }) : empty("초대 코드가 없습니다."));
   }
 }
 $("inv-go").onclick = async () => {
