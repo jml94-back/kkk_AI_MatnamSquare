@@ -13,7 +13,7 @@ from sqlalchemy import event, select
 
 from .auth import Principal
 from .db import session_scope
-from .models import LiveMessage, LiveParticipant, LiveSession, Member
+from .models import LiveMessage, LiveParticipant, LiveSession, Member, Message, MessageRead
 from .services import HubError, _check_len, _clean_links, _iso, _member_by_name, _team_message
 
 MAX_PARTICIPANTS = 30  # 사람·AI 합쳐서 (10명 + 각자 AI 여러 개 정도 여유)
@@ -22,6 +22,8 @@ MAX_WAIT_SECONDS = 50  # Claude 등 채팅 앱의 MCP 도구 타임아웃(60초)
 DEFAULT_WAIT_SECONDS = 45
 POLL_INTERVAL = 1.0
 IDLE_CLOSE_HOURS = 12  # 이 시간 동안 조용하면 자동 종료
+INVITE_FRESH = timedelta(hours=2)  # check_in 이 '초대받은 세션'으로 보여 주는 기간 (마지막 대화 기준)
+INVITE_SUBJECT = "[실시간 세션 초대]"
 
 
 def _now():
@@ -121,6 +123,7 @@ def session_to_dict(db, s: LiveSession, p: Principal | None = None) -> dict:
         "topic": s.topic,
         "status": s.status,
         "invited": s.invited or [],
+        "notified": s.notified or [],
         "created_by": s.created_by.name,
         "message_id": s.message_id,
         "participants": [
@@ -179,7 +182,117 @@ def create_session(db, p: Principal, topic: str = "", invite: list[str] | None =
     db.add(s)
     db.flush()
     _join(db, p, s)
-    return session_to_dict(db, s, p)
+    woken = notify_invited(db, p, s, [_member_by_name(db, p.team_id, n) for n in names])
+    return {**session_to_dict(db, s, p), "invite_wake": woken, "next_step": _next_step(woken)}
+
+
+# ------------------------------------------------------------------ 초대 알림 + 깨우기
+def _next_step(woken: list[dict]) -> str:
+    if not woken:
+        return ("invite 를 비워 두면 아무도 깨우지 않습니다. 특정 팀원의 AI를 부르려면 invite_live_session 으로 초대하세요. "
+                "wait_live 로 다른 참가자를 기다리면 됩니다.")
+    later = [w["name"] for w in woken if not w["auto"]]
+    msg = ("초대한 팀원의 AI에게 허브가 직접 알렸습니다. 사람에게 '세션에 참가하라고 전해 달라'고 할 필요 없습니다. "
+           "wait_live 로 상대 AI가 들어와 말하기를 기다리세요.")
+    if later:
+        msg += (f" 단, {', '.join(later)}님은 허브가 바로 깨울 수 없어서(woken_how 참고) 다음 확인 때나 "
+                "주인이 AI를 열 때 들어옵니다.")
+    return msg
+
+
+def _wake_how(db, member_id: int) -> tuple[bool, str]:
+    """(허브가 바로 깨울 수 있나, 사람에게 보여 줄 설명)"""
+    from .models import WakeConfig
+    from .wake import CLIENT_APPS, SCHEDULE_LABELS
+
+    c = db.scalar(select(WakeConfig).where(WakeConfig.member_id == member_id))
+    if not c or not c.enabled:
+        return False, "깨우기 미설정: 주인이 AI를 열면 check_in/read_inbox 에서 초대를 봅니다"
+    if c.mode == "claude_routine":
+        return True, "Claude 루틴을 바로 깨움 (몇 분 안)"
+    if c.mode == "chatgpt_events":
+        return True, "ChatGPT 이벤트로 바로 깨움 (몇 분 안)"
+    if c.mode == "scheduled":
+        app = CLIENT_APPS.get(c.client or "claude", "Claude")
+        return False, f"{app} 예약 확인 때 들어옴 ({SCHEDULE_LABELS.get(c.model or 'hourly', '')})"
+    return False, "대리 응답 방식은 실시간 세션에 들어오지 않습니다"
+
+
+def notify_invited(db, p: Principal, s: LiveSession, members: list[Member]) -> list[dict]:
+    """초대받은 팀원에게 초대 글을 보내고, 깨우기를 설정했으면 그 AI를 바로 깨운다.
+    세션을 연 사람, 지금 부르는 사람, 이미 알린 사람, 이미 들어온 사람은 건너뛴다."""
+    from .wake import enqueue_live_invite
+
+    done = set(s.notified or [])
+    joined = set(db.scalars(select(LiveParticipant.member_id).where(LiveParticipant.session_id == s.id)))
+    me = _label(p.member_name, p.agent_name)
+    out = []
+    for m in {x.id: x for x in members}.values():
+        if m.id in (s.created_by_member_id, p.member_id) or m.name in done or m.id in joined:
+            continue
+        others = [n for n in (s.invited or []) if n != m.name]
+        body = (f"{me}님이 실시간 세션 #{s.id} 에 {m.name}님의 AI를 불렀습니다 (사람이 아니라 AI끼리의 대화입니다).\n\n"
+                f"- 주제: {s.topic or '(없음)'}\n- 연 사람: {s.created_by.name}\n"
+                + (f"- 함께 초대된 팀원: {', '.join(others)}\n" if others else "")
+                + f"\nAI는 join_live_session(session_id={s.id}) 로 들어가 지금까지의 대화를 읽고, "
+                  "wait_live / send_live 를 반복하며 대화하세요. 나를 지목한(to_me) 말에 답하고, 세션이 closed 가 되면 끝냅니다. "
+                  "결정 승인·사람의 일정·비용 약속은 하지 말고 주인에게 남겨 두세요.")
+        note = Message(team_id=s.team_id, sender_member_id=p.member_id, sender_agent_id=p.agent_id, to_member_id=m.id,
+                       kind="request", subject=f"{INVITE_SUBJECT} {s.topic or f'세션 #{s.id}'}"[:200], body=body,
+                       tags=["live-session", f"live-{s.id}"], links=[])
+        db.add(note)
+        db.flush()
+        db.add(MessageRead(message_id=note.id, member_id=p.member_id))
+        auto, how = _wake_how(db, m.id)
+        queued = enqueue_live_invite(db, p, s, m, note)
+        if auto and not queued:
+            auto, how = False, "이번에는 바로 깨우지 못함 (AI끼리 연쇄 한도 등). 주인이 AI를 열면 초대를 봅니다"
+        done.add(m.name)
+        out.append({"name": m.name, "auto": auto, "woken_how": how})
+    s.notified = sorted(done)
+    db.flush()
+    return out
+
+
+def invite(db, p: Principal, session_id: int, members: list[str]) -> dict:
+    """열린 세션에 팀원을 더 부른다 (그 팀원의 AI를 깨움)."""
+    s = _session(db, p, session_id)
+    if s.status != "open":
+        raise HubError(409, "이미 종료된 세션입니다")
+    if s.invited and p.member_name not in s.invited and s.created_by_member_id != p.member_id:
+        raise HubError(403, "이 세션에 초대되지 않았습니다")
+    found = [_member_by_name(db, p.team_id, n.split("/", 1)[0].strip()) for n in members or [] if n.strip()]
+    if not found:
+        raise HubError(422, "members 에 부를 팀원 이름을 한 명 이상 적으세요")
+    if s.invited:
+        s.invited = list(dict.fromkeys([*s.invited, *(m.name for m in found)]))
+    woken = notify_invited(db, p, s, found)
+    return {**session_to_dict(db, s, p), "invite_wake": woken, "next_step": _next_step(woken)}
+
+
+def pending_invites(db, p: Principal) -> list[dict]:
+    """나를 부른(초대 알림이 온) 열린 세션 중 이 AI가 아직 들어가지 않은 것 (check_in 용)."""
+    out = []
+    rows = db.scalars(select(LiveSession).where(LiveSession.team_id == p.team_id, LiveSession.status == "open")
+                      .order_by(LiveSession.id)).all()
+    for s in rows:
+        if p.member_name not in (s.notified or []):
+            continue
+        s = _session(db, p, s.id)
+        if s.status != "open" or _aware(s.last_activity_at) < _now() - INVITE_FRESH or _participant(db, p, s):
+            continue
+        out.append({"session_id": s.id, "topic": s.topic, "created_by": s.created_by.name,
+                    "invited": s.invited or [], "created_at": _iso(s.created_at)})
+    return out
+
+
+def _mark_invites_read(db, p: Principal, s: LiveSession):
+    """세션에 들어오면 그 세션의 초대 글은 읽은 것으로 (check_in 이 같은 일을 계속 시키지 않게)."""
+    notes = db.scalars(select(Message).where(Message.team_id == s.team_id, Message.to_member_id == p.member_id,
+                                             Message.subject.startswith(INVITE_SUBJECT))).all()
+    for n in notes:
+        if f"live-{s.id}" in (n.tags or []) and not db.get(MessageRead, (n.id, p.member_id)):
+            db.add(MessageRead(message_id=n.id, member_id=p.member_id))
 
 
 def list_sessions(db, p: Principal, include_closed: bool = False) -> list[dict]:
@@ -199,6 +312,7 @@ def join_session(db, p: Principal, session_id: int) -> dict:
     if s.status != "open":
         raise HubError(409, "이미 종료된 세션입니다")
     part = _join(db, p, s)
+    _mark_invites_read(db, p, s)
     history = _history(db, s, viewer=p)
     if history:
         part.last_seen_id = max(part.last_seen_id, history[-1]["id"])
@@ -206,19 +320,31 @@ def join_session(db, p: Principal, session_id: int) -> dict:
     return {**session_to_dict(db, s, p), "history": history}
 
 
-def _check_to(db, s: LiveSession, to: list[str] | None) -> list[str]:
+def _check_to(db, p: Principal, s: LiveSession, to: list[str] | None) -> tuple[list[str], list[Member]]:
+    """지목 대상 확인. 아직 안 들어온 팀원을 지목하면 그 팀원도 초대하고 AI를 깨운다 (돌려주는 두 번째 값)."""
     if not to:
-        return []
+        return [], []
     parts = db.scalars(select(LiveParticipant).where(LiveParticipant.session_id == s.id)).all()
     valid = set()
     for x in parts:
         valid.add(x.member.name)
         if x.agent:
             valid.add(_label(x.member.name, x.agent.name))
-    bad = [n for n in to if n not in valid]
+    bad, call = [], {}
+    for n in to:
+        if n in valid:
+            continue
+        m = db.scalar(select(Member).where(Member.team_id == s.team_id, Member.name == n.split("/", 1)[0],
+                                           Member.active.is_(True)))
+        if m is None:
+            bad.append(n)
+        else:
+            call[m.id] = m
     if bad:
-        raise HubError(422, f"세션 참가자가 아닙니다: {', '.join(bad[:5])}. 참가자 이름은 list_live_sessions 로 확인하세요")
-    return list(dict.fromkeys(to))[:MAX_PARTICIPANTS]
+        raise HubError(422, f"팀원이 아닙니다: {', '.join(bad[:5])}. 이름은 list_members 로 확인하세요")
+    if call and s.invited:
+        s.invited = list(dict.fromkeys([*s.invited, *(m.name for m in call.values())]))
+    return list(dict.fromkeys(to))[:MAX_PARTICIPANTS], list(call.values())
 
 
 def send(db, p: Principal, session_id: int, body: str, links=None, to: list[str] | None = None) -> dict:
@@ -229,17 +355,22 @@ def send(db, p: Principal, session_id: int, body: str, links=None, to: list[str]
         raise HubError(422, "본문이 비어 있습니다")
     _check_len(body, "본문")
     part = _join(db, p, s)
+    to_names, call = _check_to(db, p, s, to)
     m = LiveMessage(session_id=s.id, sender_member_id=p.member_id, sender_agent_id=p.agent_id, body=body,
-                    links=_clean_links(links), to_names=_check_to(db, s, to))
+                    links=_clean_links(links), to_names=to_names)
     db.add(m)
     db.flush()
+    woken = notify_invited(db, p, s, call) if call else []
     s.last_activity_at = _now()
     part.last_seen_at = _now()
     db.refresh(m)
     # 커밋된 뒤에 기다리는 쪽을 깨운다 (커밋 전에 깨우면 아직 안 보일 수 있음)
     sid, mid = s.id, m.id
     event.listen(db, "after_commit", lambda _s: _bump(sid, mid), once=True)
-    return _msg(m, p)
+    out = _msg(m, p)
+    if woken:
+        out["invite_wake"] = woken  # 아직 안 들어온 팀원을 지목해서 그 AI를 불렀음
+    return out
 
 
 def _poll_once(p: Principal, session_id: int, mentions_only: bool = False) -> dict | None:

@@ -355,6 +355,16 @@ async def live_send(session_id: int, body: LiveSendIn, p: Me):
     return {"sent": await asyncio.to_thread(go)}
 
 
+class LiveInviteIn(BaseModel):
+    members: list[str] = Field(..., min_length=1, max_length=30, description="부를 팀원 이름들")
+
+
+@router.post("/live/{session_id}/invite", tags=["live"],
+             description="열린 세션에 팀원을 더 부르기. 그 팀원의 AI에게 초대를 보내고, 깨우기를 설정했으면 바로 깨움.")
+def live_invite(session_id: int, body: LiveInviteIn, p: Me, db: DB):
+    return live.invite(db, p, session_id, body.members)
+
+
 @router.get("/live/{session_id}/wait", tags=["live"],
             description="상대의 새 메시지를 기다림(롱폴링, 최대 50초). status: new_messages / no_reply_yet / closed." + UNTRUSTED)
 async def live_wait(session_id: int, p: Me, timeout_seconds: int = Query(live.DEFAULT_WAIT_SECONDS, ge=0, description="최대 50초. 더 크면 50초로 잘림"),

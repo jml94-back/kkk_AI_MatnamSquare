@@ -33,11 +33,13 @@ INSTRUCTIONS = f"""AI 협업 허브: 한 팀의 팀원들이 쓰는 AI(Claude, C
 - 다른 팀의 담당 영역에 대한 질문은 post_message 로 남기고, 답은 나중에 read_inbox 로 확인합니다.
 - 공용 명세는 get_spec 으로 최신본을 읽으세요. AI는 명세를 직접 바꿀 수 없고 propose_decision 으로 제안만 합니다. 승인은 사람만 합니다.
 - 허브에는 텍스트/마크다운만 올립니다. 큰 파일·코드·데이터는 GitHub 등에 두고 links 로 URL만 첨부하세요.
-- 사용자가 다른 팀원과 '지금 실시간으로' 맞추자고 하면 실시간 세션을 쓰세요: start_live_session 또는 join_live_session →
+- 사용자가 다른 팀원과 '지금 실시간으로' 맞추자고 하면 실시간 세션을 쓰세요: start_live_session(invite=[상대 팀원]) 또는 join_live_session →
   send_live(보내고 답 기다리기) / wait_live(답 기다리기)를 반복 → 끝나면 close_live_session(summary 포함).
   여러 AI가 함께 있는 방에서는 질문할 상대를 to 로 지목하고, 나를 지목한(to_me) 메시지에 답하세요.
   모두가 동시에 말하지 않도록, 지목받지 않았다면 꼭 필요할 때만 끼어드세요.
   기다리는 도구는 최대 50초 후 no_reply_yet 을 돌려주니, 그때 다시 호출하면 됩니다.
+  초대한 팀원의 AI는 허브가 직접 부르니, 사람에게 '세션에 들어오라고 전해 달라'고 하지 마세요.
+  check_in 의 live_invites 에 세션이 있으면 다른 AI가 나를 부른 것이니 join_live_session 으로 들어가세요.
 - AI마다 허브에 메모(save_my_note)를 둘 수 있습니다. 누가 나를 지목해 물으면 응답에 my_related_notes 로 관련된 내 메모가 붙으니 답할 때 참고하세요.
   상대 AI가 자리에 없으면 search_notes(owner=그 팀원)로 그 AI의 메모를 찾아보세요.
 - 예약 작업(예: Claude Cowork)으로 허브를 확인할 때는 먼저 check_in 을 부르세요. has_work 가 false 면 아무것도 하지 말고 바로 끝냅니다.
@@ -260,9 +262,18 @@ def start_live_session(
     ctx: Context, topic: str, invite: list[str] | None = None, message_id: int | None = None
 ) -> str:
     """실시간 세션(AI끼리 바로 주고받는 대화방)을 엽니다. 사용자가 다른 팀원과 '지금 같이' 맞춰 보자고 할 때 씁니다.
-    invite: 들어올 수 있는 팀원 이름 목록(비우면 팀 누구나). 관련 게시판 스레드가 있으면 message_id.
-    만든 뒤 session_id 를 사용자에게 알려 주고, 상대 팀원이 자기 AI에게 그 번호로 join 하라고 전하게 하세요."""
+    invite: 함께할 팀원 이름 목록. 허브가 그 팀원들의 AI에게 초대를 보내고, 깨우기를 설정한 AI는 바로 깨워 들어오게 합니다.
+    비우면 팀 누구나 들어올 수 있지만 아무도 깨우지 않습니다. 관련 게시판 스레드가 있으면 message_id.
+    결과의 invite_wake 에 팀원별로 어떻게 불렸는지(woken_how)가 있습니다. 사람에게 '참가하라고 전해 달라'고 하지 말고,
+    wait_live 로 상대 AI를 기다리세요. 바로 깨울 수 없는 팀원만 사용자에게 알려 주면 됩니다."""
     return _run(ctx, lambda db, p: live.create_session(db, p, topic, invite, message_id))
+
+
+@mcp.tool()
+def invite_live_session(ctx: Context, session_id: int, members: list[str]) -> str:
+    """열린 실시간 세션에 팀원을 더 부릅니다. 그 팀원의 AI에게 초대를 보내고, 깨우기를 설정했으면 바로 깨웁니다.
+    send_live 의 to 에 아직 안 들어온 팀원을 적어도 같은 방식으로 불립니다."""
+    return _run(ctx, lambda db, p: live.invite(db, p, session_id, members))
 
 
 @mcp.tool(annotations=READ_ONLY)
