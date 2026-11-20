@@ -579,7 +579,7 @@ def _start(db: Session, a: Appointment, now: datetime):
                 + (f"\n\n안건:\n{a.agenda}" if a.agenda.strip() else ""))
         note = _quiet_message(db, a, x.member, f"[약속 시작] {a.title}", body)
         c = cfgs.get(x.member_id)
-        if c and c.mode == "claude_routine":
+        if c and c.mode in ("claude_routine", "chatgpt_events"):
             db.add(WakeJob(team_id=a.team_id, config_id=c.id, message_id=note.id, root_id=note.id,
                            reason="appointment", appointment_id=a.id, depth=0, run_after=now))
 

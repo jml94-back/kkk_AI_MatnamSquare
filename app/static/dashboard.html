@@ -328,7 +328,7 @@ const DAYS = ["월", "화", "수", "목", "금", "토", "일"];
 const ST = { open: "열림", answered: "답변됨", resolved: "해결됨" };
 const RESP = { accepted: "수락", declined: "거절", invited: "응답 전" };
 const APPT = { scheduled: "예정", live: "진행 중", done: "끝남", missed: "놓침", cancelled: "취소됨" };
-const MODE = { scheduled: "예약 작업이 확인", claude_routine: "Claude 루틴이 깨어남", responder: "허브가 대신 답함" };
+const MODE = { scheduled: "예약 작업이 확인", claude_routine: "Claude 루틴이 깨어남", chatgpt_events: "ChatGPT 이벤트 작업이 깨어남", responder: "허브가 대신 답함" };
 
 let token = null, me = null, team = null;
 let state = { tab: "home", msgScope: "all", msgSel: null, decScope: "proposed", liveSel: null, day: null, week: null };
@@ -522,7 +522,12 @@ function wakeView(w) {
     ["상태", w.enabled ? "켜짐" : "꺼짐"],
   ];
   if (w.schedule) rows.push(["확인 주기", { tiers: "활동 시간대별 3/5/15분", hourly: "매시간", daily: "매일", weekdays: "평일", manual: "직접" }[w.schedule] || w.schedule]);
+  if (w.client) rows.push(["앱", w.client === "chatgpt" ? "ChatGPT" : "Claude"]);
   if (w.project) rows.push(["프로젝트", w.project]);
+  if (w.mode === "chatgpt_events") {
+    const subs = (w.subscriptions || []).filter((s) => s.active);
+    rows.push(["ChatGPT 구독", subs.length ? subs.map((s) => s.event).join(", ") : "없음 (ChatGPT에서 이벤트 작업을 만들어 주세요)"]);
+  }
   rows.push(["마지막 확인", w.last_checked_at ? when(w.last_checked_at) : "아직 없음"]);
   if (w.last_fired_at) rows.push(["마지막 호출", when(w.last_fired_at)]);
   const out = [h("dl", { class: "kv" }, rows.map(([k, v]) => [h("dt", { text: k }), h("dd", { text: v })]))];

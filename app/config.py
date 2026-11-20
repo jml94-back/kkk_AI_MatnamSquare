@@ -35,6 +35,8 @@ class Settings(BaseSettings):
     wake_max_chain: int = 3
     # 한 스레드에 대리 응답기가 달 수 있는 최대 답글 수
     wake_thread_auto_cap: int = 6
+    # MCP Events(ChatGPT) 콜백으로 사설·로컬 주소와 http 를 허용할지 (로컬 시험용. 운영에서는 false)
+    events_allow_private: bool = False
 
 
 @lru_cache

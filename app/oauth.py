@@ -23,7 +23,7 @@ router = APIRouter(include_in_schema=False)
 # 인가 코드를 돌려보낼 수 있는 곳. 임의 사이트로 토큰이 새지 않도록 알려진 AI 클라이언트와 로컬만 허용.
 ALLOWED_REDIRECT_HOSTS = {
     "claude.ai", "claude.com", "www.claude.ai",
-    "chatgpt.com", "chat.openai.com",
+    "chatgpt.com", "chat.openai.com", "platform.openai.com",
     "localhost", "127.0.0.1", "[::1]",
 }
 CODE_TTL = 300
@@ -82,6 +82,10 @@ def authorization_server(request: Request):
         "grant_types_supported": ["authorization_code", "refresh_token"],
         "code_challenge_methods_supported": ["S256"],
         "token_endpoint_auth_methods_supported": ["none"],
+        # ChatGPT 는 CIMD(client_id 가 https URL 인 클라이언트 메타데이터 문서)도 쓴다. 이 허브는 client_id 로
+        # 아무것도 허락하지 않고(redirect_uri 호스트 허용 목록 + PKCE + 사용자가 붙여 넣는 AI 토큰으로 인가) 그대로 받는다.
+        "client_id_metadata_document_supported": True,
+        "scopes_supported": ["hub"],
     }
 
 
@@ -132,8 +136,15 @@ def _page(params: dict, error: str = "", status: int = 200) -> HTMLResponse:
     )
     dest = html.escape(urlparse(params.get("redirect_uri") or "").hostname or "?")
     err = f'<p class="err">{html.escape(error)}</p>' if error else ""
-    return HTMLResponse(_PAGE.format(client=html.escape(params.get("client_id") or "MCP 클라이언트"),
+    return HTMLResponse(_PAGE.format(client=html.escape(_client_label(params.get("client_id") or "")),
                                      error=err, hidden=hidden, dest=dest), status_code=status)
+
+
+def _client_label(client_id: str) -> str:
+    """CIMD 클라이언트(client_id 가 URL)는 호스트 이름만 보여 준다. 예: chatgpt.com"""
+    if client_id.startswith("https://"):
+        return urlparse(client_id).hostname or client_id
+    return client_id or "MCP 클라이언트"
 
 
 def _check_params(p: dict) -> str | None:
