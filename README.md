@@ -153,6 +153,31 @@ docker compose --profile caddy up -d
 
 Caddy 설정(`deploy/Caddyfile`)은 요청 크기를 1MB로 제한하고, 접속 로그에서 `?token=` 값을 지웁니다.
 
+**D. Google Cloud 무료 VM (현재 운영 방식)**: 집 PC·파이를 켜 둘 필요가 없고 주소가 바뀌지 않습니다.
+
+1. Compute Engine에서 `e2-micro` VM 만들기 (무료 등급 리전: `us-west1`·`us-central1`·`us-east1`, 표준 영구 디스크 30GB 이하, HTTP·HTTPS 트래픽 허용 체크)
+2. 외부 IP를 고정 IP로 바꾸기 (VM을 껐다 켜도 주소 유지)
+   ```bash
+   gcloud compute addresses create hub-ip --addresses <VM 외부 IP> --region us-west1
+   ```
+3. VM에 스왑 2GB와 Docker 설치 (메모리가 1GB라 스왑이 필요합니다)
+   ```bash
+   sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
+   echo "/swapfile none swap sw 0 0" | sudo tee -a /etc/fstab
+   sudo apt-get install -y docker.io docker-compose git && sudo systemctl enable --now docker
+   ```
+4. 코드를 `/opt/hub`에 두고 `.env`를 설정합니다. 도메인이 없으면 IP로 바로 쓰는 무료 주소 `hub.<IP를 -로 이은 것>.sslip.io`를 쓸 수 있습니다.
+   ```bash
+   HUB_PUBLIC_URL=https://hub.34-53-110-90.sslip.io
+   HUB_PUBLIC_HOSTS=hub.34-53-110-90.sslip.io,localhost
+   HUB_DOMAIN=hub.34-53-110-90.sslip.io
+   ```
+5. `sudo docker compose --profile caddy up -d --build` (Caddy가 HTTPS 인증서를 자동으로 받습니다)
+6. 백업: `echo "0 4 * * * root /opt/hub/deploy/backup.sh" | sudo tee /etc/cron.d/hub-backup` (VM 시계는 UTC라 한국 시간 오후 1시)
+7. 업데이트: 새 코드를 `/opt/hub`에 받은 뒤 `sudo docker compose --profile caddy up -d --build`
+
+Windows에서 받은 코드를 올리면 `.sh` 파일 줄바꿈이 CRLF가 되어 실행되지 않을 수 있습니다. 저장소의 `.gitattributes`가 `*.sh`를 LF로 고정합니다.
+
 ### 5. 백업
 
 ```bash
