@@ -77,6 +77,7 @@ def _member_by_name(db: Session, team_id: int, name: str) -> Member:
 def list_members(db: Session, p: Principal) -> list[dict]:
     from . import wake
     from .models import WakeConfig
+    from .proxy import public_summary as proxy_summary
 
     rows = db.scalars(
         select(Member).where(Member.team_id == p.team_id, Member.active.is_(True)).order_by(Member.name)
@@ -94,6 +95,8 @@ def list_members(db: Session, p: Principal) -> list[dict]:
             "agents": [{"name": a.name, "llm": a.llm} for a in m.agents if a.active],
             # 이 사람의 AI가 언제·어떻게 답하는지 (None 이면 주인이 대화창을 열 때만)
             "ai_responds": wake.public_summary(cfgs.get(m.id)),
+            # 진짜 AI가 늦으면 허브가 EXAONE 으로 대신 답하는지 (None 이면 대리 응답 없음)
+            "proxy": proxy_summary(db, m.id),
             # 지금 이 사람이 활동 시간대의 어느 단계인지 (가장 활발 3분 / 자주 5분 / 거의 안 씀 15분)
             "active_now": active_now(hours.get(m.id)),
         }

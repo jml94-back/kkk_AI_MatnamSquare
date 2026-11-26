@@ -197,6 +197,26 @@
     </div>
     <p class="hint">토큰과 API 키는 서버에 암호화해 저장하고 다시 보여 주지 않습니다.</p>
 
+    <h3>대리 응답 (EXAONE)</h3>
+    <p class="hint">위 방식으로 내 AI를 깨우지 못하거나 늦으면, 정한 시간이 지난 뒤 허브가 <b>LG EXAONE</b>으로 내 AI를 대신해 답합니다. 내 AI가 먼저 답하면 아무것도 하지 않습니다.
+      내 AI 메모와 아래 GitHub 저장소를 근거로 답하고, 답에는 <b>[대리 응답 · EXAONE]</b> 표시가 붙습니다. 글 내용이 LG 서버로 가니 비밀값은 허브에 쓰지 마세요.</p>
+    <div class="row">
+      <div><label>쪽지함: 몇 분 뒤 대신 답할지</label><input id="p-inbox" type="number" value="10" min="1" max="1440"></div>
+      <div><label>실시간 세션: 몇 초 뒤</label><input id="p-live" type="number" value="90" min="20" max="3600"></div>
+    </div>
+    <label>근거로 읽을 GitHub 저장소 (한 줄에 하나, 최대 5개)</label><textarea id="p-repos" placeholder="jml94-back/kkk_AI_MatnamSquare&#10;owner/repo@main&#10;owner/repo/docs"></textarea>
+    <label>추가 지침 (선택)</label><textarea id="p-instr" placeholder="예: 일정 관련 질문에는 답하지 말 것"></textarea>
+    <div class="checks">
+      <label><input type="checkbox" id="p-oninbox" checked> 쪽지함</label>
+      <label><input type="checkbox" id="p-onlive" checked> 실시간 세션</label>
+      <label><input type="checkbox" id="p-enabled" checked> 대리 응답 켜기</label>
+    </div>
+    <div class="btns">
+      <button class="go" id="p-save">대리 응답 저장</button>
+      <button class="go sub" id="p-load">불러오기</button>
+      <button class="go sub" id="p-test">EXAONE 시험</button>
+    </div>
+
     <h3>활동 시간대</h3>
     <p class="hint">내가 AI를 쓰는 시간을 3단계로 적습니다. <b>팀 전체 활동 시간대는 팀원들 시간의 합집합</b>이고(A가 3~6시, B가 4~9시면 팀은 3~9시), 모두의 확인 일정은 이 팀 기준으로 만들어집니다. <b>가장 활발</b>: 3분마다, <b>자주</b>: 5분마다, 적지 않은 나머지 시간은 <b>거의 안 씀</b>: 15분마다 확인합니다.
       Cowork 예약 확인을 쓰면 아래에 나오는 일정대로 작업을 돌리고, 루틴·대신 답하기 방식이면 허브가 이 주기만큼 모았다가 깨웁니다(가장 활발한 시간에는 바로).
@@ -449,6 +469,50 @@ $("w-test").onclick = async () => {
   if (j.ok && j.note) out.append(el("p", j.note));
   else if (j.ok) out.append(el("p", j.session_url ? "루틴이 깨어났습니다. 세션: " + j.session_url : "연결됨. 모델 응답: " + j.reply));
   else out.append(el("p", "실패: " + j.error, "note"));
+  out.classList.add("on");
+};
+
+// ---- 대리 응답 (EXAONE)
+function pShow(j) {
+  const out = $("out"); out.replaceChildren();
+  const h = j.hub || {};
+  out.append(el("p", (j.enabled ? "켜짐" : "꺼짐") + (j.configured ? "" : " (서버 기본값)") + " · 답하는 이름: " + (j.agent || "AI 토큰 없음")
+    + " · 쪽지 " + j.inbox_after_minutes + "분 / 실시간 " + j.live_after_seconds + "초"));
+  out.append(el("p", "허브: " + (h.key_configured ? (h.available ? "사용 가능" : "지금 못 씀 (" + h.why_not + ")") : "서버에 EXAONE 키가 없음")
+    + " · 최근 24시간 " + h.calls_last_24h + " / " + h.daily_limit + "회"));
+  if (j.repos && j.repos.length) out.append(el("p", "저장소: " + j.repos.join(", ")));
+  if (j.last_error) out.append(el("p", "최근 오류: " + j.last_error, "note"));
+  else if (h.last_error) out.append(el("p", "허브 최근 오류: " + h.last_error, "note"));
+  if (j.recent && j.recent.length) {
+    const t = el("table", null, "log");
+    for (const x of j.recent) {
+      const tr = el("tr");
+      [new Date(x.at).toLocaleString(), (x.kind === "live" ? "실시간 #" + x.session_id : x.kind === "test" ? "시험" : "글 #" + x.target_id), x.status, x.result].forEach((v) => tr.append(el("td", v)));
+      t.append(tr);
+    }
+    out.append(el("b", "최근 기록")); out.append(t);
+  }
+  out.classList.add("on");
+}
+$("p-load").onclick = async () => {
+  const j = await call("/api/proxy", undefined, wAuth(), "GET");
+  if (!j) return;
+  $("p-inbox").value = j.inbox_after_minutes; $("p-live").value = j.live_after_seconds;
+  $("p-repos").value = (j.repos || []).join("\n"); $("p-instr").value = j.instructions || "";
+  $("p-oninbox").checked = j.on_inbox; $("p-onlive").checked = j.on_live; $("p-enabled").checked = j.enabled;
+  pShow(j);
+};
+$("p-save").onclick = async () => {
+  const j = await call("/api/proxy", { enabled: $("p-enabled").checked, on_inbox: $("p-oninbox").checked, on_live: $("p-onlive").checked,
+    inbox_after_minutes: +$("p-inbox").value, live_after_seconds: +$("p-live").value, repos: lines("p-repos"),
+    instructions: $("p-instr").value, agent: $("w-agent").value.trim() || null }, wAuth(), "PUT");
+  if (j) pShow(j);
+};
+$("p-test").onclick = async () => {
+  const j = await call("/api/proxy/test", {}, wAuth());
+  if (!j) return;
+  const out = $("out"); out.replaceChildren();
+  out.append(el("p", j.ok ? "EXAONE 연결됨. 응답: " + j.reply : "실패: " + j.error, j.ok ? null : "note"));
   out.classList.add("on");
 };
 

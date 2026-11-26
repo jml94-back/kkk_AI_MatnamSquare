@@ -12,7 +12,7 @@ from . import services as svc
 from .api import public, router
 from .config import get_settings
 from .db import create_all
-from . import schedule, wake
+from . import proxy, schedule, wake
 from .mcp_server import build_mcp_asgi, mcp
 from .oauth import router as oauth_router
 
@@ -35,18 +35,31 @@ async def _wake_worker():
         await asyncio.sleep(st.wake_poll_seconds)
 
 
+async def _proxy_worker():
+    """진짜 AI가 늦은 글에 EXAONE 으로 대신 답한다. EXAONE 호출이 길어도 깨우기 워커를 막지 않도록 따로 돈다."""
+    st = get_settings()
+    while True:
+        try:
+            await asyncio.to_thread(proxy.process)
+        except Exception:
+            log.exception("proxy worker 오류")
+        await asyncio.sleep(st.proxy_poll_seconds)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     create_all()
-    task = None
+    tasks = []
     st = get_settings()
     if st.wake_worker:
-        task = asyncio.create_task(_wake_worker())
+        tasks.append(asyncio.create_task(_wake_worker()))
+    if st.proxy_worker and st.exaone_api_key:
+        tasks.append(asyncio.create_task(_proxy_worker()))
     try:
         async with mcp.session_manager.run():
             yield
     finally:
-        if task:
+        for task in tasks:
             task.cancel()
 
 
