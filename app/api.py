@@ -8,7 +8,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from . import live, notes, schedule, wake
+from . import live, notes, proxy, schedule, wake
 from . import services as svc
 from .auth import Principal, extract_token, resolve_token
 from .config import get_settings
@@ -452,6 +452,38 @@ def wake_delete(p: Me, db: DB):
 @router.post("/wake/test", tags=["wake"], description="지금 한 번 호출해 설정을 확인 (루틴은 실제로 세션이 하나 뜸).")
 async def wake_test(p: Me):
     return await asyncio.to_thread(wake.test_wake, p)
+
+
+# ------------------------------------------------------------------ 대리 응답 (EXAONE)
+class ProxyIn(BaseModel):
+    enabled: bool = True
+    agent: str | None = Field(None, description="누구 이름으로 답할지 (비우면 깨우기 설정의 AI 또는 첫 AI)")
+    on_inbox: bool = Field(True, description="나에게 온 글·내 스레드의 답글에 대신 답하기")
+    on_live: bool = Field(True, description="실시간 세션에서 나를 지목한 말에 대신 답하기")
+    inbox_after_minutes: int = Field(10, ge=1, le=1440, description="쪽지함: 이만큼 내 쪽 답이 없으면 대신 답함")
+    live_after_seconds: int = Field(90, ge=20, le=3600, description="실시간: 이만큼 내 쪽 말이 없으면 대신 답함")
+    repos: list[str] | None = Field(None, description="근거로 읽을 GitHub 저장소 (owner/repo, owner/repo@branch, owner/repo/경로). 최대 5개")
+    instructions: str | None = Field(None, description="대리 응답 시 추가 지침")
+
+
+@router.get("/proxy", tags=["proxy"], description="내 대리 응답(EXAONE) 설정, 허브 상태, 최근 기록 (사람 토큰).")
+def proxy_get(p: Me, db: DB):
+    return proxy.get_proxy(db, p)
+
+
+@router.put("/proxy", tags=["proxy"], description="내 대리 응답(EXAONE) 설정 저장 (사람 토큰). 진짜 AI가 정한 시간 안에 답하지 않으면 허브가 대신 답합니다.")
+def proxy_put(body: ProxyIn, p: Me, db: DB):
+    return proxy.set_proxy(db, p, **body.model_dump())
+
+
+@router.delete("/proxy", tags=["proxy"], description="내 대리 응답 설정 삭제 (서버 기본값이 켜져 있으면 기본값으로 돌아감).")
+def proxy_delete(p: Me, db: DB):
+    return proxy.delete_proxy(db, p)
+
+
+@router.post("/proxy/test", tags=["proxy"], description="EXAONE 을 지금 한 번 짧게 불러 키를 확인 (하루 호출 수 1회 사용).")
+async def proxy_test(p: Me):
+    return await asyncio.to_thread(proxy.test_call, p)
 
 
 # ------------------------------------------------------------------ 활동 시간대 · 약속

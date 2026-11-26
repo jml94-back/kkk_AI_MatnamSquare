@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -37,6 +38,28 @@ class Settings(BaseSettings):
     wake_thread_auto_cap: int = 6
     # MCP Events(ChatGPT) 콜백으로 사설·로컬 주소와 http 를 허용할지 (로컬 시험용. 운영에서는 false)
     events_allow_private: bool = False
+
+    # ---- 대리 응답기 (EXAONE) ----
+    # 팀원의 진짜 AI가 정한 시간 안에 답하지 않으면, 허브가 LG EXAONE 으로 그 AI를 대신해 답한다.
+    # 키는 https://docs.exaone.ai 에서 발급 (무료, 30일마다 만료). HUB_EXAONE_API_KEY 또는 EXAONE_API_KEY
+    exaone_api_key: str = Field("", validation_alias=AliasChoices("HUB_EXAONE_API_KEY", "EXAONE_API_KEY"))
+    exaone_base_url: str = "https://api.exaone.ai/v1"
+    exaone_model: str = "k-exaone_v2.5"
+    # low / high / max. 대리 응답은 빨라야 하므로 low (max 는 생각이 길어 느림)
+    exaone_reasoning_effort: str = "low"
+    exaone_max_tokens: int = 4096
+    # 하루(최근 24시간) 최대 호출 수. 무료 키는 하루 100회인 경우가 있어 조금 낮게
+    exaone_daily_limit: int = 90
+    # 대리 응답기 워커 on/off (테스트에서는 끔)
+    proxy_worker: bool = True
+    proxy_poll_seconds: float = 10.0
+    # 팀원이 따로 정하지 않았을 때: 쪽지함 글은 몇 분, 실시간 세션 지목은 몇 초 기다린 뒤 대신 답할지
+    proxy_inbox_after_minutes: int = 10
+    proxy_live_after_seconds: int = 90
+    # true 면 대리 응답 설정이 없는 팀원도 기본값으로 대신 답한다 (팀원 동의를 받은 팀에서만)
+    proxy_all_members: bool = False
+    # GitHub 저장소 읽기용 토큰 (선택. 비공개 저장소이거나 호출 한도를 늘릴 때). 읽기 권한만 주세요
+    github_token: str = Field("", validation_alias=AliasChoices("HUB_GITHUB_TOKEN", "GITHUB_TOKEN"))
 
 
 @lru_cache

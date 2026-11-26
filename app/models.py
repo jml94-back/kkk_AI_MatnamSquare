@@ -393,3 +393,46 @@ class EventSubscription(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
     agent: Mapped[Agent] = relationship()
+
+
+class ProxyConfig(Base):
+    """팀원별 '대리 응답(EXAONE)' 설정. 진짜 AI가 정한 시간 안에 답하지 않으면 허브가 EXAONE 으로 대신 답한다.
+    답할 때 그 팀원 AI의 허브 메모와 여기 적은 GitHub 저장소 내용을 근거로 쓴다."""
+
+    __tablename__ = "proxy_config"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    team_id: Mapped[int] = mapped_column(ForeignKey("team.id"), index=True)
+    member_id: Mapped[int] = mapped_column(ForeignKey("member.id"), unique=True)
+    agent_id: Mapped[int | None] = mapped_column(ForeignKey("agent.id"), nullable=True)  # 누구 이름으로 답하나
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    on_inbox: Mapped[bool] = mapped_column(Boolean, default=True)  # 나에게 온 글·내 스레드 답글
+    on_live: Mapped[bool] = mapped_column(Boolean, default=True)  # 실시간 세션에서 나를 지목한 말
+    inbox_after_minutes: Mapped[int] = mapped_column(Integer, default=10)
+    live_after_seconds: Mapped[int] = mapped_column(Integer, default=90)
+    # 근거로 읽을 GitHub 저장소: "owner/repo", "owner/repo@branch", "owner/repo/하위경로"
+    repos: Mapped[list] = mapped_column(JSON, default=list)
+    instructions: Mapped[str] = mapped_column(Text, default="")
+    last_error: Mapped[str] = mapped_column(Text, default="")
+    last_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+    member: Mapped[Member] = relationship()
+
+
+class ProxyLog(Base):
+    """대리 응답 기록. 같은 글에 두 번 대신 답하지 않게 하고, 하루 호출 수를 센다."""
+
+    __tablename__ = "proxy_log"
+    __table_args__ = (UniqueConstraint("member_id", "kind", "target_id"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    team_id: Mapped[int] = mapped_column(ForeignKey("team.id"), index=True)
+    member_id: Mapped[int] = mapped_column(ForeignKey("member.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(8))  # inbox (게시판 글 id) / live (실시간 메시지 id)
+    target_id: Mapped[int] = mapped_column(Integer)
+    session_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # fired(답함) / no_reply(답할 필요 없음) / failed / skipped
+    status: Mapped[str] = mapped_column(String(16), default="fired")
+    called: Mapped[bool] = mapped_column(Boolean, default=False)  # EXAONE 을 실제로 불렀나 (하루 한도 계산)
+    result: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
